@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugins-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^22.20.0",
+    "vitest": "^4.1.8",
+    "esbuild": "^0.25.0",
+    "@deepseek-ai/cordis": "link:../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/schemastery": "link:../deepseek-harness/vendor/schemastery",
+    "@deepseek-ai/dsh-tools": "link:../deepseek-harness/packages/core/tools",
+    "@deepseek-ai/dsh-agent": "link:../deepseek-harness/packages/core/agent",
+    "@deepseek-ai/dsh-session": "link:../deepseek-harness/packages/core/session",
+    "@deepseek-ai/dsh-system-prompt": "link:../deepseek-harness/packages/core/system-prompt",
+    "@deepseek-ai/dsh-agent-default-model": "link:../deepseek-harness/packages/core/agent-default-model",
+    "@deepseek-ai/dsh-llm": "link:../deepseek-harness/packages/llm/llm",
+    "@deepseek-ai/dsh-session-projection": "link:../deepseek-harness/packages/session/session-projection",
+    "@deepseek-ai/dsh-session-title": "link:../deepseek-harness/packages/session/session-title",
+    "@deepseek-ai/dsh-workspace": "link:../deepseek-harness/packages/workspace/workspace",
+    "@deepseek-ai/dsh-agent-preset-registry": "link:../deepseek-harness/packages/preset/agent-preset-registry",
+    "@deepseek-ai/dsh-permission-presets": "link:../deepseek-harness/packages/interaction/permission-presets",
+    "@deepseek-ai/dsh-client-connection": "link:../deepseek-harness/packages/client/connection",
+    "@deepseek-ai/dsh-brand": "link:../deepseek-harness/packages/util/brand",
+    "@deepseek-ai/dsh-home-paths": "link:../deepseek-harness/packages/util/home-paths"
+  }
+}

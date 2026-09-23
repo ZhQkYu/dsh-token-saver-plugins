@@ -1,0 +1,75 @@
+# Token Saver host plugins. Rows are independent; toggle each on the Plugins page.
+- insert:
+    - id: token-saver-tool-gate
+      name: '@dsh-plugins/token-saver/tool-gate'
+      config:
+        groups: []
+        autoMcpGroups: true
+        mcpEnabledByDefault: false
+        gateSubagents: true
+
+    - id: token-saver-session-handoff
+      name: '@dsh-plugins/token-saver/session-handoff'
+      config:
+        memoryFile: .dsh/memory.md
+        memoryMaxBytes: 16384
+        handoffDir: .dsh/handoffs
+        suggestAtInputTokens: 60000
+        archiveOldSession: true
+        titleSuffix: ' (cont.)'
+
+    - id: token-saver-web-ai-bridge
+      name: '@dsh-plugins/token-saver/web-ai-bridge'
+      config:
+        browser:
+          mode: launch
+          channel: msedge
+          headless: false
+          args: ['--disable-blink-features=AutomationControlled']
+        firstTokenTimeoutMs: 60000
+        maxWaitMs: 300000
+        stableMs: 2500
+        pollMs: 500
+        replyMaxChars: 20000
+        providers:
+          - id: deepseek
+            displayName: DeepSeek
+            url: https://chat.deepseek.com/
+            strengths: reasoning, math, long-form analysis
+            enabled: true
+            minIntervalMs: 3000
+            selectors: { input: 'TODO', message: 'TODO' }   # 由 §6.7 探测填入
+          - id: doubao
+            displayName: Doubao
+            url: https://www.doubao.com/chat/
+            strengths: Chinese writing, copywriting, image prompts
+            enabled: true
+            minIntervalMs: 3000
+            selectors: { input: 'TODO', message: 'TODO' }
+          - id: qianwen
+            displayName: Qianwen
+            url: https://chat.qwen.ai/
+            strengths: Chinese knowledge Q&A, summarization
+            enabled: true
+            minIntervalMs: 3000
+            selectors: { input: 'TODO', message: 'TODO' }
+          - id: zhipu
+            displayName: Zhipu
+            url: https://chatglm.cn/
+            strengths: code generation and explanation
+            enabled: true
+            minIntervalMs: 3000
+            selectors: { input: 'TODO', message: 'TODO' }
+          - id: kimi
+            displayName: Kimi
+            url: https://www.kimi.com/
+            strengths: long-document reading, web search summaries
+            enabled: true
+            minIntervalMs: 3000
+            selectors: { input: 'TODO', message: 'TODO' }
+
+    - id: token-saver-workflow-canvas
+      name: '@dsh-plugins/token-saver/workflow-canvas'
+      config:
+        maxGraphBytes: 262144
+        keepRuns: 20

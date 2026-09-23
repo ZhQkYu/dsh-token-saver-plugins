@@ -1,0 +1,46 @@
+{
+  "name": "@dsh-plugins/token-saver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Token-saving plugins for DSH: tool gating, session handoff, free web-AI bridge, workflow canvas",
+  "exports": {
+    "./package.json": "./package.json",
+    "./protocol": { "types": "./lib/protocol.d.ts", "default": "./lib/protocol.js" },
+    "./tool-gate": "./lib/tool-gate/index.js",
+    "./session-handoff": "./lib/session-handoff/index.js",
+    "./web-ai-bridge": "./lib/web-ai-bridge/index.js",
+    "./workflow-canvas": "./lib/workflow-canvas/index.js",
+    "./tool-gate/locale/*.json": "./locale/tool-gate/*.json",
+    "./session-handoff/locale/*.json": "./locale/session-handoff/*.json",
+    "./web-ai-bridge/locale/*.json": "./locale/web-ai-bridge/*.json",
+    "./workflow-canvas/locale/*.json": "./locale/workflow-canvas/*.json"
+  },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-agent-default-model": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-session-projection": "*",
+    "@deepseek-ai/dsh-session-title": "*",
+    "@deepseek-ai/dsh-workspace": "*",
+    "@deepseek-ai/dsh-agent-preset-registry": "*",
+    "@deepseek-ai/dsh-permission-presets": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
+    "@deepseek-ai/dsh-brand": "*",
+    "@deepseek-ai/dsh-home-paths": "*"
+  }
+}

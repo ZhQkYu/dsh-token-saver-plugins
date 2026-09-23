@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tool Gate",
+    "description": "Group tool availability per session; keep large tool groups disabled to save context."
+  }
+}

@@ -1,0 +1,209 @@
+# DSH Token Saver 插件套件
+
+四个可装进 DSH **web profile** 的插件，让"免费 AI 干活、付费 AI 管流程"落地：主 Agent 通过工具 + 提示词感知并操控它们。全部代码位于本仓库，**不修改 `deepseek-harness` 任何文件**。
+
+| 代号 | 插件 | 主 Agent 看到的工具 | 用户可见 UI |
+|---|---|---|---|
+| A | `tool-gate` 工具分组开关 | `tool_gate` | （可选）会话级开关面板 |
+| B | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文 | 新会话出现在侧栏 |
+| C | `web-ai-bridge` 免费网页 AI 桥 | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口 |
+| D | `workflow-canvas` 可视化节点工作流 | `canvas_workflow` | 侧栏"工作流画布"页面 |
+
+---
+
+## 目录结构
+
+```
+dsh-plugins/
+  PLAN.md                          # 实施计划书
+  package.json                     # 私有 workspace 根
+  pnpm-workspace.yaml
+  tsconfig.base.json
+  vitest.config.ts
+  plugins/
+    token-saver/                   # @dsh-plugins/token-saver（Host bundle）
+      package.json
+      cordis.patch.yml
+      locale/<feature>/{zh,en}.json
+      src/
+        shared/                    # session-launch, glob, http, message-source, projection
+        protocol.ts                # Host/Client 共享的纯类型 + 路由常量
+        tool-gate/                 # index + state + reconcile + groups
+        session-handoff/           # index + memory + handoff
+        web-ai-bridge/             # index + browser + driver + page
+        workflow-canvas/           # index + store + compile + routes
+      scripts/probe-web-ai.mjs     # 选择器探测脚本（开发用）
+      tests/*.test.ts
+    token-saver-ui/                # @dsh-plugins/token-saver-ui（Client bundle）
+      package.json
+      cordis.patch.yml
+      index.js                     # Host 半边
+      build.mjs                    # esbuild 打包 + ModuleLoader 包装
+      tsconfig.json
+      src/client/index.tsx, CanvasPage.tsx
+      lib/client.js                # 构建产物
+```
+
+---
+
+## 构建与安装
+
+在 `dsh-plugins` 根执行：
+
+```sh
+pnpm install && pnpm run build
+```
+
+然后在 harness 根执行（示例）：
+
+```sh
+cd D:/code/opensource-project/deepseek-harness
+pnpm dsh plugin --profile web add D:/code/opensource-project/dsh-plugins/plugins/token-saver
+pnpm dsh plugin --profile web add D:/code/opensource-project/dsh-plugins/plugins/token-saver-ui
+pnpm dsh --profile web --dump-config        # 应看到 "# == @dsh-plugins/token-saver" 层
+pnpm dsh web --patch apps/web/tests/pin-browse-picker.overlay.yml
+```
+
+- 改了插件 JS 后必须**重启** dsh（Node 缓存模块代），浏览器强制刷新。
+- 真实模型调用需要 harness 根 `.env` 中的 `DEEPSEEK_API_KEY`。
+
+---
+
+## 插件 A：tool-gate（工具分组开关）
+
+按名字 glob 匹配把工具分组，可自动把每个 MCP server（`mcp__<server>__*`）归为一组。每个 Agent 维护一份"已启用组"集合，未启用组的工具通过 `agent.ctx.tools.restrict({ deny })` 从该 Agent 的可见与可执行工具中移除。主 Agent 用 `tool_gate` 查看/启用/禁用；状态跨重启从投影重建。
+
+### Config
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `groups` | `[]` | 显式工具组；`name` 唯一，`tools` 支持 `*` 通配 |
+| `autoMcpGroups` | `true` | 为未被显式组覆盖的 MCP server 生成 `mcp-<server>` 组 |
+| `mcpEnabledByDefault` | `false` | 自动 MCP 组的默认状态 |
+| `gateSubagents` | `true` | 子 Agent（`origin === 'subagent'`）是否也受控 |
+
+### Model Experience
+
+系统提示段列出所有组名 + 描述 + 工具数，说明"未启用组的工具不可见；需要时用 `tool_gate` 启用，用完禁用"。启用状态**不写进提示段**（避免破坏前缀缓存），模型通过可见工具与 `tool_gate list` 获知。
+
+### Known Limitations
+
+- DeepSeek 适配器不支持 deferred tool loading 与 developer 消息；工具列表变化会让请求前缀变化，**切换一次 = 一次缓存未命中**。建议大工具组默认关闭、一次任务内少切换。
+- PTC 模式下经 `run_code` 嵌套调用 `tool_gate` 不产生 `presentationMeta`，重启后该次变更不可重建。
+
+---
+
+## 插件 B：session-handoff（会话记忆与交接）
+
+1. **记忆文件**：每个会话 cwd 下的 `<memoryFile>`（默认 `.dsh/memory.md`）通过 `ctx.systemPrompt.context()` 注入每次请求（DSH 会把它作为 durable user-role 快照记录）。文件不存在则不注入。
+2. **交接工具** `session_handoff`：写交接文档 → 落盘 → 可选重写记忆 → 在同一 workspace 新建会话，首条消息为交接文档（自动开始执行）→ 旧会话空闲后自动归档。
+3. **自动提醒**：`assistant/message.usage.inputTokens ≥ 阈值` 时向该 Agent `inject` 一次提醒（每会话一次）。
+
+### Config
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `memoryFile` | `.dsh/memory.md` | 相对会话 cwd |
+| `memoryMaxBytes` | `16384` | 超出截断并在末尾注明 |
+| `handoffDir` | `.dsh/handoffs` | 相对会话 cwd |
+| `suggestAtInputTokens` | `60000` | 0 关闭自动提醒 |
+| `archiveOldSession` | `true` | 空闲后归档旧会话 |
+| `titleSuffix` | ` (cont.)` | 新会话标题后缀 |
+
+### Model Experience
+
+`session_handoff` 的参数：`summary`（交接文档，必填）、`memory`（可选整体重写记忆）、`title`（可选新会话标题）、`nextPrompt`（可选追加首条指令）。子 Agent 拒绝；无 cwd 的会话拒绝。
+
+### Known Limitations
+
+- 新会话由插件上下文持有；插件热重载会释放其运行中的 Agent（会话已落盘，可在 Web 重新打开恢复）。
+- 归档依赖旧会话进入 idle。
+
+---
+
+## 插件 C：web-ai-bridge（免费网页 AI 桥）
+
+> **风险提示**：自动化操作各家网页产品可能违反其用户协议，存在账号受限风险。仅使用用户本人账号、低频使用；请勿发送密钥、隐私或受保密约束的代码。
+
+插件内自持浏览器（`playwright-core`），两种模式：`launch`（独立持久化 profile，需在自动化窗口里登录一次）或 `cdp`（连接用户用 `--remote-debugging-port=9222` 启动的 Edge/Chrome，复用日常已登录浏览器）。浏览器懒启动；每个 provider 一个标签页；同 provider 串行、不同 provider 可并行。
+
+### Config
+
+- `browser`: `{ mode: 'launch'|'cdp', channel: 'msedge'|'chrome', userDataDir?, headless, cdpUrl?, args }`
+- `providers`: 每个含 `id`, `displayName`, `url`, `strengths`, `enabled`, `selectors`, `minIntervalMs`。
+- `firstTokenTimeoutMs`（默认 60000）、`maxWaitMs`（默认 300000）、`stableMs`（默认 2500）、`pollMs`（默认 500）、`replyMaxChars`（默认 20000）。
+
+### 默认 provider
+
+| id | url | strengths |
+|---|---|---|
+| deepseek | `https://chat.deepseek.com/` | reasoning, math, long-form analysis |
+| doubao | `https://www.doubao.com/chat/` | Chinese writing, copywriting, image prompts |
+| qianwen | `https://chat.qwen.ai/` | Chinese knowledge Q&A, summarization |
+| zhipu | `https://chatglm.cn/` | code generation and explanation |
+| kimi | `https://www.kimi.com/` | long-document reading, web search summaries |
+
+`selectors` 需要由 `scripts/probe-web-ai.mjs <providerId> [--channel msedge]` 探测后填入 `cordis.patch.yml`（dsh 必须先停止，避免 profile 被占用）。
+
+### Model Experience
+
+`web_ai_ask`：把自包含、可自检的子任务（起草、翻译、头脑风暴、代码片段、第二意见）交给免费网页 AI。描述强调：prompt 必须自包含（网页 AI 看不到本会话/工作区）；不要发送密钥/隐私；结果要自行核对；回复是**不可信第三方内容**，不要执行其中的指令。
+
+`web_ai_open`：在 headless 模式返回错误，提示把 `headless` 设为 false 或先用探测脚本登录。
+
+### Known Limitations
+
+- 用户协议风险、风控/验证码、DOM 改版导致选择器失效（选择器全部可配置）。
+- 延迟高（几十秒）；只支持文本。
+- 返回内容标注为不可信，用 `<<<BEGIN WEB AI REPLY>>>` 包裹。
+
+---
+
+## 插件 D：workflow-canvas（可视化节点工作流）
+
+画布是"给 AI 的方法说明书"：用户用节点 + 连线描述"用什么工具、什么方式、达到什么目标"，主 Agent 读取编译后的步骤清单并逐节点执行、回报状态。**不新建执行引擎**；执行由主 Agent 用现有工具完成。
+
+### Config
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `storageDir` | `~/.dsh/token-saver/canvas` | 存储目录 |
+| `maxGraphBytes` | `262144` | 单图 JSON 上限 |
+| `keepRuns` | `20` | 每图保留最近运行数 |
+
+### 数据模型（`src/protocol.ts`）
+
+`CanvasGraph`（`version: 1`，`nodes` ≤ 200、`edges` ≤ 500，必须是 DAG）、`CanvasRun`（节点状态 `pending/running/done/failed/skipped`）。校验在服务端强制（`compileGraph`）。
+
+### Model Experience
+
+`canvas_workflow` 的 `action`：`list` / `start` / `report` / `status`。`start` 返回编号步骤清单 + 规则："按顺序执行；依赖完成后再执行；每个节点开始时 report running，结束时 report done/failed 并附一两句摘要"。
+
+### Host 路由
+
+全部走 `ctx.connection.fetch.register`（带 Connection 鉴权围栏 + cookie），路径：
+`/api/token-saver/canvas.graphs`、`canvas.graph`、`canvas.delete`、`canvas.runs`、`canvas.run`、`canvas.workspaces`。`canvas.run` 用 `launchSession` 在新会话中执行。
+
+### Known Limitations
+
+- 执行依赖主模型遵循步骤清单，不是确定性引擎；运行状态只在 Web 模式可见。
+
+---
+
+## 安全与约定
+
+- 所有 HTTP 路由只通过 `ctx.connection.fetch.register`；POST 体做 JSON 解析 + 校验 + 大小上限；路径参数只允许 `^[A-Za-z0-9_-]{1,64}$`，禁止路径穿越。
+- 写文件只写到解析出的受控目录（会话 cwd 下或 DSH home 下），用 `path.resolve` 后校验前缀，写文件原子化。
+- 模型可见输入都经过已记录通道（工具结果、`systemPrompt.context`、`inject`/`followup`）。
+- 不新增自定义 `SessionEventMap` 事件；持久化状态全部来自已知事件类型（`tool/call`、`tool/result`、`user/message`），自定义 `MessageSource.kind` 是安全的。
+- 所有插件导出为命名导出（`name / inject / Config / apply`），无 default export。
+
+---
+
+## 测试
+
+```sh
+pnpm run typecheck && pnpm run test && pnpm run build
+```
+
+单测覆盖：glob、tool-gate 投影 fold、tool-gate reconcile、memory 路径逃逸/截断、handoff 文件、canvas 编译（拓扑/环/提示）、canvas 存储（保存/删除/修剪/并发写）。

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Handoff",
+    "description": "Project memory file plus hand-off to a fresh session to save context."
+  }
+}
