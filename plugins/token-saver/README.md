@@ -54,18 +54,19 @@ dsh-plugins/
 pnpm install && pnpm run build
 ```
 
-然后在 harness 根执行（示例）：
+然后在 harness 根执行（`<HARNESS>` 为 harness 路径，`<PLUGINS>` 为本仓库路径；本地路径必须为**绝对路径**）：
 
 ```sh
-cd D:/code/opensource-project/deepseek-harness
-pnpm dsh plugin --profile web add D:/code/opensource-project/dsh-plugins/plugins/token-saver
-pnpm dsh plugin --profile web add D:/code/opensource-project/dsh-plugins/plugins/token-saver-ui
+cd <HARNESS>
+pnpm dsh plugin --profile web add <PLUGINS>/plugins/token-saver
+pnpm dsh plugin --profile web add <PLUGINS>/plugins/token-saver-ui
 pnpm dsh --profile web --dump-config        # 应看到 "# == @dsh-plugins/token-saver" 层
 pnpm dsh web --patch apps/web/tests/pin-browse-picker.overlay.yml
 ```
 
 - 改了插件 JS 后必须**重启** dsh（Node 缓存模块代），浏览器强制刷新。
 - 真实模型调用需要 harness 根 `.env` 中的 `DEEPSEEK_API_KEY`。
+- 从 GitHub 安装（`pnpm dsh plugin --profile web add github:ZhQkYu/dsh-plugins`）需要本仓库提供自包含 `prepare` 脚本 + 在 profile 的 `pnpm-workspace.yaml` 中 `allowBuilds` 授权，详见仓库根 `README.md`。
 
 ---
 

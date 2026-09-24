@@ -14,7 +14,7 @@
         memoryFile: .dsh/memory.md
         memoryMaxBytes: 16384
         handoffDir: .dsh/handoffs
-        suggestAtInputTokens: 60000
+        suggestAtInputTokens: 600000
         archiveOldSession: true
         titleSuffix: ' (cont.)'
 
