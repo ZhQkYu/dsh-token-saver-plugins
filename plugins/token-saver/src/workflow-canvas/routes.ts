@@ -7,57 +7,32 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { z as zod } from 'zod'
-import { ROUTES, CanvasGraph, ID_PATTERN } from '../protocol.ts'
-import { CanvasStore } from './store.ts'
-import { compileGraph } from './compile.ts'
-import { json, readJsonBody, textError } from '../shared/http.ts'
-import { launchSession } from '../shared/session-launch.ts'
-import { tokenSaverSource } from '../shared/message-source.ts'
 import { boundContextSummary } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import type {} from '@deepseek-ai/dsh-workspace'
-import type {} from '@deepseek-ai/dsh-agent-preset-registry'
-import type {} from '@deepseek-ai/dsh-session-title'
+import { ROUTES, ID_PATTERN } from '../protocol.ts'
+import type { CanvasStore } from './store.ts'
+import { compileGraph } from './compile.ts'
+import { deleteRequestSchema, graphSchema, runRequestSchema } from './schema.ts'
+import { errorResponse, json, readJsonBody, textError } from '../shared/http.ts'
+import { launchSession } from '../shared/session-launch.ts'
+import { tokenSaverSource } from '../shared/message-source.ts'
 
-const nodeKinds = ['input', 'task', 'web-ai', 'subagent', 'tool', 'review', 'output'] as const
-
-/** Structural graph validator for the save route. */
-const graphValidator = {
-  parse(value: unknown): CanvasGraph {
-    const graph = value as CanvasGraph
-    if (graph === null || typeof graph !== 'object' || graph.version !== 1) throw new Error('invalid graph: expected version 1')
-    if (typeof graph.id !== 'string' || !ID_PATTERN.test(graph.id)) throw new Error('invalid graph: bad id')
-    if (typeof graph.name !== 'string' || typeof graph.description !== 'string') throw new Error('invalid graph: missing name/description')
-    if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) throw new Error('invalid graph: nodes/edges must be arrays')
-    for (const node of graph.nodes) {
-      if (typeof node.id !== 'string' || typeof node.kind !== 'string' || !nodeKinds.includes(node.kind as (typeof nodeKinds)[number])) {
-        throw new Error('invalid graph: bad node')
-      }
-    }
-    return graph
-  },
-}
-
-/** Structural validator for a graph id + workspace id run request. */
-const runRequestValidator = {
-  parse(value: unknown): { graphId: string; workspaceId: string } {
-    const record = value as Record<string, unknown>
-    if (typeof record['graphId'] !== 'string' || !ID_PATTERN.test(record['graphId'])) throw new Error('invalid graphId')
-    if (typeof record['workspaceId'] !== 'string' || !ID_PATTERN.test(record['workspaceId'])) throw new Error('invalid workspaceId')
-    return { graphId: record['graphId'], workspaceId: record['workspaceId'] }
-  },
-}
-
-/** Register the canvas routes. */
+/**
+ * Register the canvas routes.
+ * @param ctx - plugin context owning the route registrations.
+ * @param store - graph and run storage.
+ * @param options - body limits.
+ */
 export function registerCanvasRoutes(ctx: Context, store: CanvasStore, options: { maxGraphBytes: number }): void {
   ctx.connection.fetch.register({
     path: ROUTES.graphs,
     methods: ['GET'],
     requestBody: 'buffered',
-    fetch: () => Promise.resolve(json({ graphs: store.list().map(graph => ({ id: graph.id, name: graph.name, description: graph.description, nodeCount: graph.nodes.length })) })),
+    fetch: () => Promise.resolve(json({
+      graphs: store.list().map(graph => ({ id: graph.id, name: graph.name, description: graph.description, nodeCount: graph.nodes.length })),
+    })),
   })
 
   ctx.connection.fetch.register({
@@ -67,12 +42,13 @@ export function registerCanvasRoutes(ctx: Context, store: CanvasStore, options: 
     fetch: async (request) => {
       if (request.method === 'POST') {
         try {
-          const body = await readJsonBody(request, graphValidator, options.maxGraphBytes)
+          const body = await readJsonBody(request, graphSchema, options.maxGraphBytes)
           compileGraph(body)
-          await store.save(body)
-          return json({ ok: true })
+          const graph = { ...body, updatedAt: Date.now() }
+          await store.save(graph)
+          return json({ graph })
         } catch (error: unknown) {
-          return textError(error instanceof Error ? error.message : 'invalid graph', 400)
+          return errorResponse(error, 400)
         }
       }
       const id = new URL(request.url).searchParams.get('id') ?? ''
@@ -89,11 +65,11 @@ export function registerCanvasRoutes(ctx: Context, store: CanvasStore, options: 
     requestBody: 'buffered',
     fetch: async (request) => {
       try {
-        const body = await readJsonBody(request, zod.object({ id: zod.string().regex(ID_PATTERN) }))
+        const body = await readJsonBody(request, deleteRequestSchema)
         store.delete(body.id)
         return json({ ok: true })
       } catch (error: unknown) {
-        return textError(error instanceof Error ? error.message : 'invalid request', 400)
+        return errorResponse(error, 400)
       }
     },
   })
@@ -114,23 +90,31 @@ export function registerCanvasRoutes(ctx: Context, store: CanvasStore, options: 
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      let body: { graphId: string; workspaceId: string }
       try {
-        const body = await readJsonBody(request, runRequestValidator)
-        const graph = store.get(body.graphId)
-        if (graph === undefined) return textError('graph not found', 404)
-        const workspace = ctx.workspaceRegistry.get(brandString<WorkspaceId>(body.workspaceId))
-        if (workspace === undefined) return textError('workspace not found', 404)
+        body = await readJsonBody(request, runRequestSchema)
+      } catch (error: unknown) {
+        return errorResponse(error, 400)
+      }
+      const graph = store.get(body.graphId)
+      if (graph === undefined) return textError('graph not found', 404)
+      const workspace = ctx.workspaceRegistry.get(brandString<WorkspaceId>(body.workspaceId))
+      if (workspace === undefined) return textError('workspace not found', 404)
+      try {
         compileGraph(graph)
-        const prompt = `Run the canvas workflow "${graph.name}" (graphId=${graph.id}) with canvas_workflow start, then execute every step in order.`
+      } catch (error: unknown) {
+        return errorResponse(error, 400)
+      }
+      try {
         const sessionId = await launchSession(ctx, {
           cwd: workspace.path,
           title: graph.name,
-          prompt,
+          prompt: `Run the canvas workflow "${graph.name}" (graphId=${graph.id}) with canvas_workflow start, then execute every step in order.`,
           source: tokenSaverSource('canvas-run', boundContextSummary(`Run canvas workflow ${graph.name}`)),
         })
         return json({ sessionId })
       } catch (error: unknown) {
-        return textError(error instanceof Error ? error.message : 'invalid request', 400)
+        return errorResponse(error, 500)
       }
     },
   })
@@ -139,6 +123,8 @@ export function registerCanvasRoutes(ctx: Context, store: CanvasStore, options: 
     path: ROUTES.workspaces,
     methods: ['GET'],
     requestBody: 'buffered',
-    fetch: () => Promise.resolve(json({ workspaces: ctx.workspaceRegistry.list().map(workspace => ({ id: workspace.id, title: workspace.title, path: workspace.path })) })),
+    fetch: () => Promise.resolve(json({
+      workspaces: ctx.workspaceRegistry.list().map(workspace => ({ id: workspace.id, title: workspace.title, path: workspace.path })),
+    })),
   })
 }

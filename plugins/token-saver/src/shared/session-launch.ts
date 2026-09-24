@@ -22,6 +22,11 @@ import type { SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-workspace'
 
+/** Services {@link launchSession} reads; every caller's plugin `inject` must include them. */
+export const LAUNCH_SESSION_SERVICES = [
+  'agents', 'agentPresets', 'agentDefaultModel', 'workspaceRegistry', 'sessionTitle', 'permissionPresets',
+] as const
+
 /** Inputs for {@link launchSession}. */
 export interface LaunchSessionRequest {
   /** Workspace directory the new Session is created in. */

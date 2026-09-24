@@ -6,7 +6,8 @@
  * @module @dsh-plugins/token-saver/workflow-canvas/compile
  */
 
-import { CanvasGraph, CompiledStep, NodeKind } from '../protocol.ts'
+import type { CanvasGraph, CanvasNode, CompiledStep, NodeKind } from '../protocol.ts'
+import { MAX_EDGES, MAX_NODES } from './schema.ts'
 
 /** One error carrying a stable `code` for the canvas. */
 export class CanvasError extends Error {
@@ -17,7 +18,7 @@ export class CanvasError extends Error {
 }
 
 /** Generate a model-facing hint for a step based on its node kind. */
-export function hintFor(kind: NodeKind, config: { provider?: string; tool?: string }): string {
+export function hintFor(kind: NodeKind, config: CanvasNode['config']): string {
   switch (kind) {
     case 'web-ai':
       return `Delegate with web_ai_ask (provider=${config.provider ?? 'default'})`
@@ -43,7 +44,7 @@ export function hintFor(kind: NodeKind, config: { provider?: string; tool?: stri
  * @param maxEdges - the edge-count limit.
  * @returns the ordered steps.
  */
-export function compileGraph(graph: CanvasGraph, maxNodes = 200, maxEdges = 500): { steps: CompiledStep[] } {
+export function compileGraph(graph: CanvasGraph, maxNodes = MAX_NODES, maxEdges = MAX_EDGES): { steps: CompiledStep[] } {
   if (graph.nodes.length > maxNodes) {
     throw new CanvasError('TOO_MANY', `graph has ${graph.nodes.length} nodes; limit is ${maxNodes}`)
   }

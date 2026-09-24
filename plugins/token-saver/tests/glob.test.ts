@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchesGlob, mcpServerOf, mcpToolName } from '../src/shared/glob.ts'
+import { matchesGlob, mcpServerOf } from '../src/shared/glob.ts'
 
 describe('matchesGlob', () => {
   it('matches an exact name without a wildcard', () => {
@@ -24,6 +24,15 @@ describe('matchesGlob', () => {
     expect(matchesGlob('', '')).toBe(true)
     expect(matchesGlob('', 'x')).toBe(false)
   })
+
+  it('honours every wildcard in a pattern', () => {
+    expect(matchesGlob('mcp__*__read*', 'mcp__fs__read_file')).toBe(true)
+    expect(matchesGlob('mcp__*__read*', 'mcp__fs__write_file')).toBe(false)
+    expect(matchesGlob('*a*', 'bab')).toBe(true)
+    expect(matchesGlob('*a*a*', 'aa')).toBe(true)
+    expect(matchesGlob('*a*a*', 'a')).toBe(false)
+    expect(matchesGlob('ab*ba', 'aba')).toBe(false)
+  })
 })
 
 describe('mcpServerOf', () => {
@@ -34,11 +43,5 @@ describe('mcpServerOf', () => {
 
   it('returns undefined for non-MCP names', () => {
     expect(mcpServerOf('web_fetch')).toBeUndefined()
-  })
-})
-
-describe('mcpToolName', () => {
-  it('builds the mcp tool name', () => {
-    expect(mcpToolName('github', 'list_repos')).toBe('mcp__github__list_repos')
   })
 })

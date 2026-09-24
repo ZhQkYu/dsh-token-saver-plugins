@@ -22,12 +22,12 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { readMemory, writeMemory, resolveWithin } from './memory.ts'
 import { writeHandoff } from './handoff.ts'
-import { launchSession } from '../shared/session-launch.ts'
+import { launchSession, LAUNCH_SESSION_SERVICES } from '../shared/session-launch.ts'
 import { tokenSaverSource } from '../shared/message-source.ts'
 import { asProjectionStateSchema } from '../shared/projection.ts'
 
 export const name = 'token-saver-session-handoff'
-export const inject = ['tools', 'agents', 'sessionProjections', 'sessionTitle', 'permissionPresets', 'agentPresets', 'agentDefaultModel', 'workspaceRegistry']
+export const inject = ['tools', 'systemPrompt', 'sessionProjections', ...LAUNCH_SESSION_SERVICES]
 
 /** Session-handoff configuration. */
 export interface Config {
@@ -204,6 +204,7 @@ export function apply(ctx: Context, config: Config): void {
         title,
         prompt,
         source: tokenSaverSource('handoff', boundContextSummary(`Continued from session ${agent.session.id}`), { fromSession: agent.session.id }),
+        permissionPreset: ctx.permissionPresets.current(agent.session),
         ...(oldHeader.agentPreset === undefined ? {} : { agentPreset: oldHeader.agentPreset }),
         ...(model === undefined ? {} : { model }),
       })
@@ -232,20 +233,32 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   if (config.suggestAtInputTokens > 0) {
+    // The durable flag flips only when the injected message is claimed, so this set covers the gap.
+    const pending = new Set<Session['id']>()
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'assistant/message') return
       if (isSubagent(session)) return
       const usage = event.data.usage
       if (usage === undefined || usage.inputTokens < config.suggestAtInputTokens) return
+      if (pending.has(session.id)) return
       const state = ctx.sessionProjections.stateOf(session, 'tokenSaverHandoffSuggested')
       if (state?.suggested === true) return
       const agent = ctx.agents.get(session.id)
       if (agent === undefined) return
-      const summary = boundContextSummary(`Context is ~${usage.inputTokens} tokens`)
-      agent.inject(createUserMessage({
-        content: [{ type: 'text', text: `Context is ~${usage.inputTokens} tokens. If the task will continue for long, call session_handoff to move to a fresh session with a handoff summary.` }],
-        source: tokenSaverSource('handoff-suggest', summary),
-      }))
+      pending.add(session.id)
+      const tokens = usage.inputTokens
+      // `inject` appends to this Session, which rejects appends while it is still publishing this event.
+      queueMicrotask(() => {
+        try {
+          agent.inject(createUserMessage({
+            content: [{ type: 'text', text: `Context is ~${tokens} tokens. If the task will continue for long, call session_handoff to move to a fresh session with a handoff summary.` }],
+            source: tokenSaverSource('handoff-suggest', boundContextSummary(`Context is ~${tokens} tokens`)),
+          }))
+        } catch (error: unknown) {
+          pending.delete(session.id)
+          ctx.logger.warn(`token-saver: handoff reminder not delivered: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      })
     })
   }
 }

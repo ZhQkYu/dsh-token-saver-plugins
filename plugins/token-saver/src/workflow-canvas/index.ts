@@ -12,17 +12,17 @@ import { randomUUID } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import type {} from '@deepseek-ai/dsh-workspace'
-import { ROUTES, CanvasGraph, CanvasRun, NodeStatus, CompiledStep } from '../protocol.ts'
+import { NODE_STATUSES, type CanvasRun } from '../protocol.ts'
 import { CanvasStore } from './store.ts'
 import { compileGraph } from './compile.ts'
 import { registerCanvasRoutes } from './routes.ts'
+import { graphSchema, MAX_SUMMARY_CHARS, runSchema } from './schema.ts'
+import { LAUNCH_SESSION_SERVICES } from '../shared/session-launch.ts'
 
 export const name = 'token-saver-workflow-canvas'
-export const inject = ['tools', 'systemPrompt', 'connection', 'workspaceRegistry']
+export const inject = ['tools', 'systemPrompt', 'connection', ...LAUNCH_SESSION_SERVICES]
 
 /** Workflow-canvas configuration. */
 export interface Config {
@@ -45,6 +45,27 @@ const CANVAS_DESCRIPTION = 'Work with a visual node workflow (canvas) that a use
   + 'Use `list` to see available workflows. Use `start` to begin one, then execute each '
   + 'step in order, reporting `running`/`done`/`failed` for each node via `report`. Use '
   + '`status` to see progress.'
+
+/** One step as the tool returns it. */
+interface StepValue {
+  nodeId: string
+  kind: string
+  title: string
+  instruction: string
+  dependsOn: string[]
+  hint: string
+}
+
+/** The union of fields the four actions return. */
+interface CanvasValue {
+  graphs?: { id: string; name: string; description: string; nodeCount: number }[]
+  runId?: string
+  steps?: StepValue[]
+  done?: number
+  total?: number
+  next?: string[]
+  nodes?: Record<string, unknown>
+}
 
 /**
  * Apply the workflow-canvas plugin.
@@ -70,15 +91,15 @@ export function apply(ctx: Context, config: Config): void {
         enum: ['list', 'start', 'report', 'status'],
         description: 'What to do with the workflow.',
       },
-      graphId: { type: 'string', description: 'The workflow id (list/start).' },
+      graphId: { type: 'string', description: 'The workflow id (start).' },
       runId: { type: 'string', description: 'The run id (report/status).' },
       nodeId: { type: 'string', description: 'The node id (report).' },
       status: {
         type: 'string',
-        enum: ['pending', 'running', 'done', 'failed', 'skipped'],
+        enum: [...NODE_STATUSES],
         description: 'The node status (report).',
       },
-      summary: { type: 'string', description: 'A short result summary (report).' },
+      summary: { type: 'string', description: `A short result summary, at most ${MAX_SUMMARY_CHARS} characters (report).` },
     },
     output: {
       schema: {
@@ -109,6 +130,7 @@ export function apply(ctx: Context, config: Config): void {
                 kind: { type: 'string', required: true },
                 title: { type: 'string', required: true },
                 instruction: { type: 'string', required: true },
+                dependsOn: { type: 'array', required: true, items: { type: 'string' } },
                 hint: { type: 'string', required: true },
               },
             },
@@ -116,6 +138,7 @@ export function apply(ctx: Context, config: Config): void {
           done: { type: 'integer' },
           total: { type: 'integer' },
           next: { type: 'array', items: { type: 'string' } },
+          // Keyed by node id; each value is `{ status, summary? }`.
           nodes: { type: 'object', additionalProperties: true },
         },
       },
@@ -130,51 +153,53 @@ export function apply(ctx: Context, config: Config): void {
         const graph = store.get(args.graphId)
         if (graph === undefined) throw new Error(`canvas_workflow: unknown graph ${JSON.stringify(args.graphId)}`)
         const { steps } = compileGraph(graph)
-        const runId = `run-${randomUUID().slice(0, 12)}`
         const now = Date.now()
-        const nodes: CanvasRun['nodes'] = {}
-        for (const step of steps) nodes[step.nodeId] = { status: 'pending' as NodeStatus, updatedAt: now }
         const run: CanvasRun = {
-          runId,
+          runId: `run-${randomUUID()}`,
           graphId: graph.id,
           ...(exec.agent === undefined ? {} : { sessionId: exec.agent.session.id }),
           startedAt: now,
           updatedAt: now,
-          nodes,
+          nodes: Object.fromEntries(steps.map(step => [step.nodeId, { status: 'pending' as const, updatedAt: now }])),
         }
         await store.saveRun(run)
-        return { runId, steps: steps.map(step => ({ nodeId: step.nodeId, kind: step.kind, title: step.title, instruction: step.instruction, hint: step.hint })) }
+        return {
+          runId: run.runId,
+          steps: steps.map(step => ({ nodeId: step.nodeId, kind: step.kind, title: step.title, instruction: step.instruction, dependsOn: step.dependsOn, hint: step.hint })),
+        }
       }
       if (args.action === 'report') {
-        if (args.runId === undefined || args.nodeId === undefined || args.status === undefined) {
+        const { runId, nodeId, status } = args
+        if (runId === undefined || nodeId === undefined || status === undefined) {
           throw new Error('canvas_workflow report requires runId, nodeId, and status')
         }
-        const run = store.getRun(args.runId)
-        if (run === undefined) throw new Error(`canvas_workflow: unknown run ${JSON.stringify(args.runId)}`)
-        const node = run.nodes[args.nodeId]
-        if (node === undefined) throw new Error(`canvas_workflow: unknown node ${JSON.stringify(args.nodeId)} in run ${args.runId}`)
-        const summary = args.summary?.trim()
-        run.nodes[args.nodeId] = {
-          status: args.status as NodeStatus,
-          ...(summary === undefined || summary === '' ? {} : { summary }),
-          updatedAt: Date.now(),
-        }
-        run.updatedAt = Date.now()
-        await store.saveRun(run)
+        const summary = args.summary?.trim() ?? ''
+        if (summary.length > MAX_SUMMARY_CHARS) throw new Error(`canvas_workflow summary exceeds ${MAX_SUMMARY_CHARS} characters`)
+        const run = await store.updateRun(runId, (current) => {
+          if (current.nodes[nodeId] === undefined) throw new Error(`canvas_workflow: unknown node ${JSON.stringify(nodeId)} in run ${runId}`)
+          const now = Date.now()
+          return {
+            ...current,
+            updatedAt: now,
+            nodes: { ...current.nodes, [nodeId]: { status, ...(summary === '' ? {} : { summary }), updatedAt: now } },
+          }
+        })
         const entries = Object.entries(run.nodes)
-        const done = entries.filter(([, value]) => value.status === 'done' || value.status === 'failed').length
-        const next = entries.filter(([, value]) => value.status === 'pending').map(([id]) => id)
-        return { done, total: entries.length, next }
+        return {
+          runId,
+          done: entries.filter(([, node]) => node.status !== 'pending' && node.status !== 'running').length,
+          total: entries.length,
+          next: entries.filter(([, node]) => node.status === 'pending').map(([id]) => id),
+        }
       }
-      if (args.action === 'status') {
-        if (args.runId === undefined) throw new Error('canvas_workflow status requires runId')
-        const run = store.getRun(args.runId)
-        if (run === undefined) throw new Error(`canvas_workflow: unknown run ${JSON.stringify(args.runId)}`)
-        const nodes: Record<string, string> = {}
-        for (const [id, value] of Object.entries(run.nodes)) nodes[id] = value.status
-        return { nodes }
+      if (args.runId === undefined) throw new Error('canvas_workflow status requires runId')
+      const run = store.getRun(args.runId)
+      if (run === undefined) throw new Error(`canvas_workflow: unknown run ${JSON.stringify(args.runId)}`)
+      const nodes: Record<string, { status: string; summary?: string }> = {}
+      for (const [id, node] of Object.entries(run.nodes)) {
+        nodes[id] = { status: node.status, ...(node.summary === undefined ? {} : { summary: node.summary }) }
       }
-      throw new Error(`canvas_workflow: unknown action ${JSON.stringify(args.action)}`)
+      return { runId: run.runId, nodes }
     },
     isConcurrencySafe: () => false,
   }))
@@ -182,62 +207,32 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'token-saver-workflow-canvas',
     order: 1870,
-    text: () => 'A user may have defined reusable workflows on a canvas. Use canvas_workflow list/start to execute one, reporting each node as you go.',
+    text: 'A user may have defined reusable workflows on a canvas. Use canvas_workflow list/start to execute one, reporting each node as you go.',
   })
-
-  ctx.effect(() => () => {
-    // The store holds no handles; nothing to dispose beyond the routes (registered
-    // via connection.fetch.register, which is effect-scoped).
-  })
-}
-
-const nodeKinds = ['input', 'task', 'web-ai', 'subagent', 'tool', 'review', 'output'] as const
-
-/** Validate and parse a saved graph. */
-const graphSchema = {
-  parse(value: unknown): CanvasGraph {
-    const graph = value as CanvasGraph
-    if (graph === null || typeof graph !== 'object' || graph.version !== 1) throw new Error('invalid graph: expected version 1')
-    if (typeof graph.id !== 'string' || typeof graph.name !== 'string') throw new Error('invalid graph: missing id/name')
-    if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) throw new Error('invalid graph: nodes/edges must be arrays')
-    for (const node of graph.nodes) {
-      if (typeof node.id !== 'string' || typeof node.kind !== 'string' || !nodeKinds.includes(node.kind as (typeof nodeKinds)[number])) {
-        throw new Error('invalid graph: bad node')
-      }
-    }
-    return graph
-  },
-}
-
-/** Validate and parse a saved run. */
-const runSchema = {
-  parse(value: unknown): CanvasRun {
-    const run = value as CanvasRun
-    if (run === null || typeof run !== 'object' || typeof run.runId !== 'string' || typeof run.graphId !== 'string') {
-      throw new Error('invalid run: missing runId/graphId')
-    }
-    if (run.nodes === null || typeof run.nodes !== 'object') throw new Error('invalid run: nodes must be an object')
-    return run
-  },
 }
 
 /** Render a canvas tool result to model text. */
-function renderCanvas(value: Record<string, unknown>): string {
-  if (Array.isArray(value.graphs)) {
-    const graphs = value.graphs as { id: string; name: string; description: string; nodeCount: number }[]
-    return `Canvas workflows:\n${graphs.map(graph => `- ${graph.id}: ${graph.name} (${graph.nodeCount} nodes) — ${graph.description}`).join('\n')}`
+function renderCanvas(value: CanvasValue): string {
+  if (value.graphs !== undefined) {
+    if (value.graphs.length === 0) return 'No canvas workflows are defined.'
+    return `Canvas workflows:\n${value.graphs.map(graph => `- ${graph.id}: ${graph.name} (${graph.nodeCount} nodes)${graph.description === '' ? '' : ` — ${graph.description}`}`).join('\n')}`
   }
-  if (Array.isArray(value.steps)) {
-    const steps = value.steps as { nodeId: string; kind: string; title: string; instruction: string; hint: string }[]
-    const numbered = steps.map((step, index) => `${index + 1}. [${step.kind}] ${step.title} — ${step.hint}`)
-    return `Started run ${String(value.runId ?? '')}. Execute steps in order; report each node running/done/failed with a short summary:\n${numbered.join('\n')}`
+  if (value.steps !== undefined) {
+    const numbered = value.steps.map((step, index) => {
+      const after = step.dependsOn.length === 0 ? '' : ` (after ${step.dependsOn.join(', ')})`
+      return `${index + 1}. [${step.nodeId}] ${step.kind}: ${step.title}${after}\n   Instruction: ${step.instruction === '' ? '(none)' : step.instruction}\n   How: ${step.hint}`
+    })
+    return `Started run ${value.runId ?? ''}. Execute the steps in order; start a step only after the steps it depends on. `
+      + `Report each node with canvas_workflow report (running when you begin, done or failed with a one- or two-sentence summary when you finish):\n${numbered.join('\n')}`
   }
-  if (value.nodes !== undefined && typeof value.nodes === 'object') {
-    const nodes = value.nodes as Record<string, string>
-    return `Run ${String(value.runId ?? '')} status: ${Object.entries(nodes).map(([id, status]) => `${id}=${status}`).join(', ')}`
+  if (value.nodes !== undefined) {
+    const lines = Object.entries(value.nodes).map(([id, node]) => {
+      const status = typeof node === 'object' && node !== null && 'status' in node && typeof node.status === 'string' ? node.status : 'unknown'
+      const summary = typeof node === 'object' && node !== null && 'summary' in node && typeof node.summary === 'string' ? ` — ${node.summary}` : ''
+      return `- ${id}: ${status}${summary}`
+    })
+    return `Run ${value.runId ?? ''} status:\n${lines.join('\n')}`
   }
-  return `Progress: ${String(value.done ?? 0)}/${String(value.total ?? 0)} done; next: ${Array.isArray(value.next) ? value.next.join(', ') : ''}`
+  const next = value.next ?? []
+  return `Run ${value.runId ?? ''}: ${value.done ?? 0}/${value.total ?? 0} nodes finished; pending: ${next.length === 0 ? 'none' : next.join(', ')}`
 }
-
-export type { CompiledStep }
-export { ROUTES }

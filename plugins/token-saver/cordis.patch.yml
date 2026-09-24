@@ -26,6 +26,7 @@
           channel: msedge
           headless: false
           args: ['--disable-blink-features=AutomationControlled']
+        inputTimeoutMs: 15000
         firstTokenTimeoutMs: 60000
         maxWaitMs: 300000
         stableMs: 2500
@@ -38,35 +39,46 @@
             strengths: reasoning, math, long-form analysis
             enabled: true
             minIntervalMs: 3000
-            selectors: { input: 'TODO', message: 'TODO' }   # 由 §6.7 探测填入
+            # Discovered on chat.deepseek.com. ds-message is the stable per-message container;
+            # ds-assistant-message-main-content is the assistant's reply body (excludes the
+            # reasoning/thinking block). These ds-* classes are DeepSeek's design-system names and
+            # do not carry build-hash suffixes. Re-discover with scripts/probe-web-ai.mjs.
+            selectors:
+              input: 'textarea[placeholder="给 DeepSeek 发送消息 "]'
+              message: 'div.ds-message'
+              messageContent: 'div.ds-assistant-message-main-content'
+              send: ''
+              newChat: ''
+              busy: ''
+              stop: ''
           - id: doubao
             displayName: Doubao
             url: https://www.doubao.com/chat/
             strengths: Chinese writing, copywriting, image prompts
-            enabled: true
+            enabled: false
             minIntervalMs: 3000
-            selectors: { input: 'TODO', message: 'TODO' }
+            selectors: { input: '', message: '' }
           - id: qianwen
             displayName: Qianwen
             url: https://chat.qwen.ai/
             strengths: Chinese knowledge Q&A, summarization
-            enabled: true
+            enabled: false
             minIntervalMs: 3000
-            selectors: { input: 'TODO', message: 'TODO' }
+            selectors: { input: '', message: '' }
           - id: zhipu
             displayName: Zhipu
             url: https://chatglm.cn/
             strengths: code generation and explanation
-            enabled: true
+            enabled: false
             minIntervalMs: 3000
-            selectors: { input: 'TODO', message: 'TODO' }
+            selectors: { input: '', message: '' }
           - id: kimi
             displayName: Kimi
             url: https://www.kimi.com/
             strengths: long-document reading, web search summaries
-            enabled: true
+            enabled: false
             minIntervalMs: 3000
-            selectors: { input: 'TODO', message: 'TODO' }
+            selectors: { input: '', message: '' }
 
     - id: token-saver-workflow-canvas
       name: '@dsh-plugins/token-saver/workflow-canvas'

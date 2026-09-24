@@ -9,6 +9,11 @@
 /** Default cap for a buffered POST body, in bytes. */
 export const MAX_BODY_BYTES = 1_000_000
 
+/** The part of a zod schema this helper uses; the first issue becomes the error message. */
+export interface BodySchema<T> {
+  safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } }
+}
+
 /**
  * Read and JSON-parse a route request body. Throws with a clear message when
  * the body is too large, is not valid JSON, or does not match the zod schema.
@@ -17,7 +22,7 @@ export const MAX_BODY_BYTES = 1_000_000
  * @param cap - maximum accepted body size in bytes.
  * @returns the validated body value.
  */
-export async function readJsonBody<T>(request: Request, schema: { parse(value: unknown): T }, cap = MAX_BODY_BYTES): Promise<T> {
+export async function readJsonBody<T>(request: Request, schema: BodySchema<T>, cap = MAX_BODY_BYTES): Promise<T> {
   const contentLength = Number(request.headers.get('content-length') ?? '0')
   if (Number.isFinite(contentLength) && contentLength > cap) {
     throw new Error(`request body exceeds ${cap} bytes`)
@@ -35,14 +40,19 @@ export async function readJsonBody<T>(request: Request, schema: { parse(value: u
   } catch {
     throw new Error('request body is not valid JSON')
   }
-  return schema.parse(value)
+  const parsed = schema.safeParse(value)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    throw new Error(`invalid request: ${issue === undefined ? 'bad value' : `${issue.path.join('.') || '(root)'}: ${issue.message}`}`)
+  }
+  return parsed.data
 }
 
 /** Build a JSON response with `cache-control: no-store`. */
 export function json(value: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers)
   headers.set('cache-control', 'no-store')
-  return new Response(JSON.stringify(value), { ...init, headers })
+  return Response.json(value, { ...init, headers })
 }
 
 /** Build a plain-text error response with the given status. */

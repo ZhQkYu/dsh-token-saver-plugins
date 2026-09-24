@@ -1,25 +1,33 @@
 /**
  * Minimal page abstraction for the web-ai-bridge driver. This is the unit
- * boundary so the ask loop can be tested without a real browser.
+ * boundary so the ask loop can be tested without a real browser. Single-element
+ * reads go through `first()`/`last()`, because Playwright locators are strict
+ * and reject reads that match more than one element.
  *
  * @module @dsh-plugins/token-saver/web-ai-bridge/page
  */
 
 /** A locator handle exposing only what the driver needs. */
 export interface LocatorLike {
-  /** Resolve whether at least one element matches. */
+  /** Number of matched elements. */
   count(): Promise<number>
-  /** Read the visible text of the (first) matched element. */
+  /** The first matched element. */
+  first(): LocatorLike
+  /** The last matched element. */
+  last(): LocatorLike
+  /** Whether the (single) matched element is visible; false when none matches. */
+  isVisible(): Promise<boolean>
+  /** Visible text of the (single) matched element. */
   innerText(): Promise<string>
-  /** Fill a textarea/input with `value`. */
+  /** Visible text of every matched element, in document order. */
+  allInnerTexts(): Promise<string[]>
+  /** Replace the value of a textarea, input, or contenteditable. */
   fill(value: string): Promise<void>
-  /** Focus the element (for contenteditable input). */
+  /** Click the (single) matched element. */
   click(): Promise<void>
-  /** Type `value` into the focused element. */
-  keyboardType(value: string): Promise<void>
-  /** Press a key on the focused element. */
+  /** Press a key on the (single) matched element. */
   press(key: string): Promise<void>
-  /** Locate a descendant by CSS selector. */
+  /** Locate descendants by CSS selector. */
   locator(selector: string): LocatorLike
 }
 
@@ -31,9 +39,10 @@ export interface PageLike {
   locator(selector: string): LocatorLike
   /** Navigate to a URL. */
   goto(url: string): Promise<void>
+  /** Insert text at the focused element without key events, so newlines never submit. */
+  insertText(text: string): Promise<void>
+  /** Whether the page was closed. */
+  isClosed(): boolean
   /** Close the page. */
   close(): Promise<void>
 }
-
-/** A page factory the driver uses to (re)create a provider page. */
-export type PageFactory = () => Promise<PageLike>

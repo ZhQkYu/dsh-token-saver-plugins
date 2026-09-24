@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workflow Canvas",
+    "description": "Define reusable node workflows in the sidebar; the main agent runs them in a new session with live node status."
+  }
+}

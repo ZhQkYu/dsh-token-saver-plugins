@@ -6,6 +6,7 @@
   "description": "Token-saving plugins for DSH: tool gating, session handoff, free web-AI bridge, workflow canvas",
   "exports": {
     "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
     "./protocol": { "types": "./lib/protocol.d.ts", "default": "./lib/protocol.js" },
     "./tool-gate": "./lib/tool-gate/index.js",
     "./session-handoff": "./lib/session-handoff/index.js",

@@ -5,7 +5,7 @@
  * @module @dsh-plugins/token-saver/web-ai-bridge/driver
  */
 
-import { LocatorLike, PageLike } from './page.ts'
+import type { LocatorLike, PageLike } from './page.ts'
 
 /** CSS selectors for one web-AI provider page. */
 export interface SelectorSet {
@@ -13,9 +13,9 @@ export interface SelectorSet {
   input: string
   /** Optional send button; when absent the driver presses Enter. */
   send?: string
-  /** The assistant reply message container (last one wins). */
+  /** Assistant reply containers; the last match is the newest reply. */
   message: string
-  /** Optional container-inner body selector to exclude reasoning text. */
+  /** Optional selector inside a reply for its answer body, excluding reasoning text. */
   messageContent?: string
   /** Optional "generating" indicator (e.g. a stop button). */
   busy?: string
@@ -33,7 +33,7 @@ export interface ProviderConfig {
   id: string
   /** Human-readable display name. */
   displayName: string
-  /** Provider URL. */
+  /** Provider start URL (https). */
   url: string
   /** Model-facing strengths description. */
   strengths: string
@@ -45,52 +45,128 @@ export interface ProviderConfig {
   minIntervalMs: number
 }
 
+/** Ask timing bounds, all in milliseconds. */
+export interface AskTimings {
+  /** How long to wait for the input box after opening the conversation. */
+  inputTimeoutMs: number
+  /** How long to wait for a new reply to appear after sending. */
+  firstTokenTimeoutMs: number
+  /** Total bound for one ask, measured from its start. */
+  maxWaitMs: number
+  /** How long the reply text must stay unchanged to count as complete. */
+  stableMs: number
+  /** Page polling interval. */
+  pollMs: number
+  /** Maximum reply characters returned. */
+  replyMaxChars: number
+}
+
 /** The result of one ask. */
 export interface AskResult {
   text: string
   truncated: boolean
+  /** The reply was still changing (or the provider still busy) when `maxWaitMs` elapsed. */
   timedOut: boolean
   elapsedMs: number
 }
 
-/** A cancellation token. */
-export interface AskSignal {
-  readonly aborted: boolean
-  addListener(listener: () => void): void
-  removeListener(listener: () => void): void
-}
+/** Stable failure codes surfaced to the model. */
+export type WebAiErrorCode = 'NOT_LOGGED_IN' | 'ABORTED' | 'TIMEOUT'
 
-/** A per-provider mutex that serializes asks. */
-export interface Mutex {
-  run<T>(task: () => Promise<T>): Promise<T>
-}
-
-/** Errors surfaced to the model, with a stable `code`. */
+/** Errors surfaced to the model, with a stable `code` prefix in the message. */
 export class WebAiError extends Error {
-  constructor(readonly code: 'NOT_LOGGED_IN' | 'NO_INPUT' | 'ABORTED' | 'TIMEOUT', message: string) {
-    super(message)
+  constructor(readonly code: WebAiErrorCode, message: string) {
+    super(`${code}: ${message}`)
     this.name = 'WebAiError'
   }
 }
 
-const isVisible = async (locator: LocatorLike): Promise<boolean> => {
+const visible = (locator: LocatorLike): Promise<boolean> => locator.first().isVisible().then(value => value, () => false)
+
+const countOf = (locator: LocatorLike): Promise<number> => locator.count().then(value => value, () => 0)
+
+function sameOrigin(current: string, target: string): boolean {
   try {
-    return (await locator.count()) > 0
-  } catch {
+    return new URL(current).origin === new URL(target).origin
+  } catch (invalidUrl: unknown) {
+    // A blank or special page (about:blank) has no comparable origin.
     return false
   }
 }
 
+function aborted(): WebAiError {
+  return new WebAiError('ABORTED', 'ask cancelled')
+}
+
 /**
- * The ask algorithm. Fills the provider input, sends, waits for a new reply,
- * and polls until the reply stabilizes or the timeout elapses.
+ * Sleep for `ms`, rejecting as soon as `signal` aborts.
+ * @param ms - delay in milliseconds.
+ * @param signal - cancellation.
+ */
+export function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(aborted())
+      return
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(aborted())
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** Poll `condition` until it holds or `timeoutMs` elapses. */
+async function waitFor(condition: () => Promise<boolean>, timeoutMs: number, pollMs: number, signal: AbortSignal): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    if (await condition()) return true
+    if (Date.now() >= deadline) return false
+    await delay(pollMs, signal)
+  }
+}
+
+/** Open a fresh conversation, or make sure the provider page is loaded for `continue`. */
+async function openConversation(page: PageLike, provider: ProviderConfig, conversation: 'new' | 'continue'): Promise<void> {
+  const loaded = sameOrigin(page.url(), provider.url)
+  if (conversation === 'continue') {
+    if (!loaded) await page.goto(provider.url)
+    return
+  }
+  if (loaded && provider.selectors.newChat !== undefined && provider.selectors.newChat !== '') {
+    const button = page.locator(provider.selectors.newChat).first()
+    if (await visible(button) && await button.click().then(() => true, () => false)) return
+  }
+  await page.goto(provider.url)
+}
+
+/** Read the newest reply's answer text, or `undefined` when it could not be read this poll. */
+async function readReply(message: LocatorLike, provider: ProviderConfig): Promise<string | undefined> {
+  const last = message.last()
+  const contentSelector = provider.selectors.messageContent
+  if (contentSelector !== undefined && contentSelector !== '') {
+    const content = last.locator(contentSelector)
+    if (await countOf(content) > 0) {
+      return content.allInnerTexts().then(texts => texts.join('\n').trim(), () => undefined)
+    }
+  }
+  return last.innerText().then(text => text.trim(), () => undefined)
+}
+
+/**
+ * The ask algorithm: open the conversation, fill and send the prompt, wait for
+ * a new reply, and poll until it stops changing or `maxWaitMs` elapses.
  * @param page - the provider page.
  * @param provider - provider config.
  * @param prompt - the question to ask.
- * @param conversation - 'new' starts a fresh conversation.
- * @param opts - timings.
- * @param signal - cancellation.
- * @param afterAsk - optional hook (for tests) after the reply stabilizes.
+ * @param conversation - 'new' starts a fresh conversation; 'continue' reuses the open one.
+ * @param timings - timing bounds.
+ * @param signal - cancellation; aborting clicks the provider's stop button when configured.
  * @returns the reply text and status.
  */
 export async function ask(
@@ -98,167 +174,72 @@ export async function ask(
   provider: ProviderConfig,
   prompt: string,
   conversation: 'new' | 'continue',
-  opts: {
-    firstTokenTimeoutMs: number
-    maxWaitMs: number
-    stableMs: number
-    pollMs: number
-    replyMaxChars: number
-  },
-  signal: AskSignal,
-  afterAsk?: (text: string, timedOut: boolean) => void,
+  timings: AskTimings,
+  signal: AbortSignal,
 ): Promise<AskResult> {
   const start = Date.now()
-  if (conversation === 'new' && provider.selectors.newChat) {
-    const newChat = page.locator(provider.selectors.newChat)
-    if (await isVisible(newChat)) {
-      try {
-        await newChat.click()
-      } catch {
-        /* fall through to goto */
-      }
-    } else {
-      await page.goto(provider.url)
+  if (signal.aborted) throw aborted()
+  await openConversation(page, provider, conversation)
+
+  const selectors = provider.selectors
+  const input = page.locator(selectors.input).first()
+  const inputReady = await waitFor(async () => {
+    if (selectors.loggedOut !== undefined && selectors.loggedOut !== '' && await visible(page.locator(selectors.loggedOut))) {
+      throw new WebAiError('NOT_LOGGED_IN', `${provider.displayName} shows its sign-in prompt. Call web_ai_open and ask the user to sign in.`)
     }
-  } else if (!page.url().startsWith(new URL(provider.url).origin)) {
-    await page.goto(provider.url)
+    return visible(input)
+  }, timings.inputTimeoutMs, timings.pollMs, signal)
+  if (!inputReady) {
+    throw new WebAiError('NOT_LOGGED_IN', `No input box appeared on ${provider.displayName}. Call web_ai_open and ask the user to sign in.`)
   }
 
-  if (provider.selectors.loggedOut && await isVisible(page.locator(provider.selectors.loggedOut))) {
-    throw new WebAiError('NOT_LOGGED_IN', `You appear to be logged out of ${provider.displayName}. Call web_ai_open to sign in.`)
+  const message = page.locator(selectors.message)
+  // A single-page app may still show the previous chat right after "new chat"; let it clear first.
+  if (conversation === 'new') await waitFor(async () => await countOf(message) === 0, timings.inputTimeoutMs, timings.pollMs, signal)
+  const before = await countOf(message)
+
+  await input.click()
+  if (!await input.fill(prompt).then(() => true, () => false)) await page.insertText(prompt)
+  const send = selectors.send !== undefined && selectors.send !== '' ? page.locator(selectors.send).first() : undefined
+  if (send !== undefined && await visible(send)) await send.click()
+  else await input.press('Enter')
+
+  const started = await waitFor(async () => await countOf(message) > before, timings.firstTokenTimeoutMs, timings.pollMs, signal)
+  if (!started) {
+    throw new WebAiError('TIMEOUT', `${provider.displayName} did not start replying within ${timings.firstTokenTimeoutMs} ms.`)
   }
 
-  const input = page.locator(provider.selectors.input)
-  if (!(await isVisible(input))) {
-    // Wait a short grace period for the input to appear.
-    const deadline = start + 15000
-    while (Date.now() < deadline) {
-      if (await isVisible(input)) break
-      await delay(200, signal)
-    }
-    if (!(await isVisible(input))) {
-      throw new WebAiError('NOT_LOGGED_IN', `No input box appeared for ${provider.displayName}. Call web_ai_open to sign in.`)
-    }
-  }
-
-  const before = await countMessages(page, provider.selectors.message)
-  await fillInput(input, prompt)
-  if (provider.selectors.send) {
-    const send = page.locator(provider.selectors.send)
-    if (await isVisible(send)) await send.click()
-    else await input.press('Enter')
-  } else {
-    await input.press('Enter')
-  }
-
-  // Wait for the reply count to increase (first token).
-  const firstDeadline = start + opts.firstTokenTimeoutMs
-  while (Date.now() < firstDeadline) {
-    if (await countMessages(page, provider.selectors.message) > before) break
-    if (signal.aborted) throw new WebAiError('ABORTED', 'ask cancelled')
-    await delay(opts.pollMs, signal)
-  }
-
-  // Poll until stable.
-  let lastText = ''
-  let lastChange = Date.now()
-  let timedOut = false
   let text = ''
-  while (Date.now() - start < opts.maxWaitMs) {
+  let lastChange = Date.now()
+  let complete = false
+  while (Date.now() - start < timings.maxWaitMs) {
     if (signal.aborted) {
-      await clickStop(page, provider)
-      throw new WebAiError('ABORTED', 'ask cancelled')
+      if (selectors.stop !== undefined && selectors.stop !== '') {
+        const stop = page.locator(selectors.stop).first()
+        if (await visible(stop)) await stop.click().then(() => undefined, () => undefined)
+      }
+      throw aborted()
     }
-    const current = await readReply(page, provider)
-    if (current !== lastText) {
-      lastText = current
+    const current = await readReply(message, provider)
+    if (current !== undefined && current !== text) {
+      text = current
       lastChange = Date.now()
     }
-    const busy = provider.selectors.busy !== undefined && await isVisible(page.locator(provider.selectors.busy))
-    if (!busy && Date.now() - lastChange >= opts.stableMs) {
-      text = lastText
+    const busy = selectors.busy !== undefined && selectors.busy !== '' && await visible(page.locator(selectors.busy))
+    if (!busy && text !== '' && Date.now() - lastChange >= timings.stableMs) {
+      complete = true
       break
     }
-    await delay(opts.pollMs, signal)
+    await delay(timings.pollMs, signal).catch((error: unknown) => {
+      // Abort is handled at the top of the loop so the stop button is still clicked.
+      if (!(error instanceof WebAiError)) throw error
+    })
   }
-  if (text === '') {
-    text = lastText
+  const truncated = text.length > timings.replyMaxChars
+  return {
+    text: truncated ? `${text.slice(0, timings.replyMaxChars)}\n[reply truncated]` : text,
+    truncated,
+    timedOut: !complete,
+    elapsedMs: Date.now() - start,
   }
-  if (text === '') {
-    timedOut = true
-  } else if (Date.now() - start >= opts.maxWaitMs && text !== lastText) {
-    // still growing at the deadline
-  }
-  const elapsedMs = Date.now() - start
-  const truncated = text.length > opts.replyMaxChars
-  const clipped = truncated ? `${text.slice(0, opts.replyMaxChars)}\n[reply truncated]` : text
-  afterAsk?.(clipped, timedOut)
-  return { text: clipped, truncated, timedOut, elapsedMs }
-}
-
-/** Count assistant messages matching the message selector. */
-async function countMessages(page: PageLike, selector: string): Promise<number> {
-  try {
-    return await page.locator(selector).count()
-  } catch {
-    return 0
-  }
-}
-
-/** Read the last assistant message text, narrowing to the content selector when present. */
-async function readReply(page: PageLike, provider: ProviderConfig): Promise<string> {
-  const message = page.locator(provider.selectors.message)
-  const count = await message.count()
-  if (count === 0) return ''
-  const last = page.locator(`${provider.selectors.message}:last-of-type`)
-  if (provider.selectors.messageContent) {
-    const content = last.locator(provider.selectors.messageContent)
-    if (await isVisible(content)) return (await content.innerText()).trim()
-  }
-  try {
-    return (await last.innerText()).trim()
-  } catch {
-    return ''
-  }
-}
-
-/** Fill a textarea/input or contenteditable. */
-async function fillInput(input: LocatorLike, prompt: string): Promise<void> {
-  try {
-    await input.fill(prompt)
-  } catch {
-    await input.click()
-    await input.keyboardType(prompt)
-  }
-}
-
-/** Click the stop button if configured, to interrupt generation on cancel. */
-async function clickStop(page: PageLike, provider: ProviderConfig): Promise<void> {
-  if (provider.selectors.stop) {
-    try {
-      const stop = page.locator(provider.selectors.stop)
-      if (await isVisible(stop)) await stop.click()
-    } catch {
-      /* best effort */
-    }
-  }
-}
-
-/** A cancellable sleep. */
-function delay(ms: number, signal: AskSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new WebAiError('ABORTED', 'ask cancelled'))
-      return
-    }
-    const timer = setTimeout(() => {
-      signal.removeListener(onAbort)
-      resolve()
-    }, ms)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      reject(new WebAiError('ABORTED', 'ask cancelled'))
-    }
-    signal.addListener(onAbort)
-  })
 }

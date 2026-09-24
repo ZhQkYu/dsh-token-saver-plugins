@@ -61,12 +61,11 @@ export function foldToolGate(state: ToolGateState, event: SessionEvent): ToolGat
   }
   if (event.type === 'tool/result') {
     const callId = event.data.message.toolCallId
-    if (state.calls[callId] === true && event.data.message.isError !== true && isEnabledMeta(event.data.meta)) {
-      const calls = { ...state.calls }
-      delete calls[callId]
-      return { enabled: event.data.meta.enabled, calls }
-    }
-    return state
+    if (state.calls[callId] !== true) return state
+    const calls = { ...state.calls }
+    delete calls[callId]
+    const meta = event.data.meta
+    return { enabled: event.data.message.isError !== true && isEnabledMeta(meta) ? meta.enabled : state.enabled, calls }
   }
   if (event.type === 'user/message') {
     const source = event.data.source

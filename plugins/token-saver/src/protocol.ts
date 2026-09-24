@@ -7,8 +7,11 @@
  * @module @dsh-plugins/token-saver/protocol
  */
 
+/** Every node kind, in palette order. */
+export const NODE_KINDS = ['input', 'task', 'web-ai', 'subagent', 'tool', 'review', 'output'] as const
+
 /** A node in a canvas workflow graph. */
-export type NodeKind = 'input' | 'task' | 'web-ai' | 'subagent' | 'tool' | 'review' | 'output'
+export type NodeKind = (typeof NODE_KINDS)[number]
 
 /** One node in a {@link CanvasGraph}. */
 export interface CanvasNode {
@@ -17,9 +20,9 @@ export interface CanvasNode {
   title: string
   instruction: string
   config: {
-    provider?: string
-    tool?: string
-    model?: string
+    provider?: string | undefined
+    tool?: string | undefined
+    model?: string | undefined
   }
   position: { x: number; y: number }
 }
@@ -29,7 +32,7 @@ export interface CanvasEdge {
   id: string
   source: string
   target: string
-  label?: string
+  label?: string | undefined
 }
 
 /** A saved workflow graph. */
@@ -43,13 +46,16 @@ export interface CanvasGraph {
   updatedAt: number
 }
 
+/** Every node status. */
+export const NODE_STATUSES = ['pending', 'running', 'done', 'failed', 'skipped'] as const
+
 /** Lifecycle state of one node within a {@link CanvasRun}. */
-export type NodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type NodeStatus = (typeof NODE_STATUSES)[number]
 
 /** Per-node progress for one run. */
 export interface CanvasRunNode {
   status: NodeStatus
-  summary?: string
+  summary?: string | undefined
   updatedAt: number
 }
 
@@ -57,7 +63,7 @@ export interface CanvasRunNode {
 export interface CanvasRun {
   runId: string
   graphId: string
-  sessionId?: string
+  sessionId?: string | undefined
   startedAt: number
   updatedAt: number
   nodes: Record<string, CanvasRunNode>
@@ -73,11 +79,6 @@ export interface CompiledStep {
   hint: string
 }
 
-/** The compiled step list for a graph, in dependency order. */
-export interface CompiledGraph {
-  steps: CompiledStep[]
-}
-
 /** Connection fetch route paths registered under the token-saver namespace. */
 export const ROUTES = {
   graphs: '/api/token-saver/canvas.graphs',
@@ -87,9 +88,6 @@ export const ROUTES = {
   run: '/api/token-saver/canvas.run',
   workspaces: '/api/token-saver/canvas.workspaces',
 } as const
-
-/** The route segment charset enforced by the Connection fence. */
-export const ROUTE_SEGMENT = /^[A-Za-z0-9_$.-]+$/
 
 /** Identifier charset for graphs and nodes (no path traversal). */
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/

@@ -33,16 +33,18 @@ export interface ResolvedGroup {
 export const GROUP_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/
 
 /**
- * Validate configured groups and synthesize MCP server groups for servers not
- * covered by an explicit group. Throws on duplicate names, empty tool lists, or
- * a conflict between an explicit group and a synthesized MCP group.
+ * Validate configured groups and synthesize a group per MCP server that no
+ * explicit group covers. Explicit-group errors throw (they are load-time
+ * configuration faults); a discovered server is skipped, never an error, when
+ * an explicit group already matches one of its tools or owns its `mcp-<server>`
+ * name.
  * @param config - the tool-gate config.
- * @param mcpServers - the known MCP server names discovered from tool names.
+ * @param mcpServers - discovered MCP server names mapped to their tool names.
  * @returns the resolved, ordered group list.
  */
 export function resolveGroups(
   config: { groups: GroupConfig[]; autoMcpGroups: boolean; mcpEnabledByDefault: boolean },
-  mcpServers: ReadonlySet<string>,
+  mcpServers: ReadonlyMap<string, ReadonlySet<string>>,
 ): ResolvedGroup[] {
   const groups: ResolvedGroup[] = []
   const seen = new Set<string>()
@@ -60,11 +62,12 @@ export function resolveGroups(
     groups.push({ name: group.name, description: group.description, patterns: group.tools, enabledByDefault: group.enabledByDefault })
   }
   if (config.autoMcpGroups) {
-    for (const server of [...mcpServers].sort()) {
+    const explicit = [...groups]
+    for (const server of [...mcpServers.keys()].sort()) {
       const name = `mcp-${server}`
-      if (seen.has(name)) {
-        throw new Error(`tool-gate auto MCP group ${JSON.stringify(name)} conflicts with an explicit group`)
-      }
+      const tools = mcpServers.get(server) ?? new Set<string>()
+      const covered = [...tools].some(tool => explicit.some(group => group.patterns.some(pattern => matchesGlob(pattern, tool))))
+      if (seen.has(name) || covered) continue
       seen.add(name)
       groups.push({
         name,

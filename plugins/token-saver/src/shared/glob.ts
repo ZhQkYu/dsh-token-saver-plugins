@@ -17,13 +17,19 @@
  * @returns whether `name` matches `pattern`.
  */
 export function matchesGlob(pattern: string, name: string): boolean {
-  const wildcard = pattern.indexOf('*')
-  if (wildcard === -1) return pattern === name
-  const before = pattern.slice(0, wildcard)
-  const after = pattern.slice(wildcard + 1)
-  if (!name.startsWith(before)) return false
-  if (after.length === 0) return true
-  return name.endsWith(after) && name.length >= before.length + after.length
+  const parts = pattern.split('*')
+  if (parts.length === 1) return pattern === name
+  const head = parts[0] ?? ''
+  const tail = parts[parts.length - 1] ?? ''
+  if (name.length < head.length + tail.length || !name.startsWith(head) || !name.endsWith(tail)) return false
+  let cursor = head.length
+  const end = name.length - tail.length
+  for (const middle of parts.slice(1, -1)) {
+    const found = name.indexOf(middle, cursor)
+    if (found === -1 || found + middle.length > end) return false
+    cursor = found + middle.length
+  }
+  return true
 }
 
 /**
@@ -38,14 +44,4 @@ export function mcpServerOf(name: string): string | undefined {
   const sep = rest.indexOf('__')
   if (sep === -1) return rest
   return rest.slice(0, sep)
-}
-
-/**
- * Derive the MCP tool name for a server/tool pair, matching the harness format.
- * @param server - the MCP server name.
- * @param tool - the tool name within that server.
- * @returns the `mcp__<server>__<tool>` name.
- */
-export function mcpToolName(server: string, tool: string): string {
-  return `mcp__${server}__${tool}`
 }

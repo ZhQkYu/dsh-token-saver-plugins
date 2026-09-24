@@ -29,7 +29,7 @@ describe('foldToolGate', () => {
     expect(next.calls['c1']).toBeUndefined()
   })
 
-  it('does not fold on an error result', () => {
+  it('does not fold on an error result but forgets the call', () => {
     let state = toolGateInit()
     state = foldToolGate(state, event('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'tool_gate', arguments: '{}' }))
     const next = foldToolGate(state, event('tool/result', {
@@ -37,7 +37,19 @@ describe('foldToolGate', () => {
       message: { toolCallId: 'c1', isError: true, content: [], role: 'tool' },
       meta: { enabled: ['a'] },
     }))
-    expect(next).toBe(state)
+    expect(next.enabled).toBeNull()
+    expect(next.calls).toEqual({})
+  })
+
+  it('keeps following defaults after a list result without enabled meta', () => {
+    let state = toolGateInit()
+    state = foldToolGate(state, event('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'tool_gate', arguments: '{"action":"list"}' }))
+    const next = foldToolGate(state, event('tool/result', {
+      turn: 1, step: 1,
+      message: { toolCallId: 'c1', isError: false, content: [], role: 'tool' },
+      meta: {},
+    }))
+    expect(next).toEqual({ enabled: null, calls: {} })
   })
 
   it('folds a user/message notice', () => {

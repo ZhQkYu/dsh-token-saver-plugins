@@ -75,20 +75,22 @@ export class CanvasStore {
   }
 
   private readGraphFile(filePath: string): CanvasGraph | undefined {
+    let raw: string
     try {
-      const raw = fs.readFileSync(filePath, 'utf8')
-      if (raw.length > this.config.maxGraphBytes) return undefined
-      return this.graphValidator.parse(JSON.parse(raw))
-    } catch {
+      raw = fs.readFileSync(filePath, 'utf8')
+    } catch (missing: unknown) {
+      // A deleted or unreadable graph reads as absent.
       return undefined
     }
+    if (Buffer.byteLength(raw) > this.config.maxGraphBytes) return undefined
+    return parseOrUndefined(this.graphValidator, raw)
   }
 
   /** Save (create or replace) a graph. */
   save(graph: CanvasGraph): Promise<void> {
     this.assertId(graph.id)
     const json = JSON.stringify(graph)
-    if (json.length > this.config.maxGraphBytes) {
+    if (Buffer.byteLength(json) > this.config.maxGraphBytes) {
       throw new Error(`graph ${graph.id} exceeds ${this.config.maxGraphBytes} bytes`)
     }
     return this.lock(graph.id).run(async () => {
@@ -126,28 +128,56 @@ export class CanvasStore {
   }
 
   private readRunFile(filePath: string): CanvasRun | undefined {
+    let raw: string
     try {
-      return this.runValidator.parse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
-    } catch {
+      raw = fs.readFileSync(filePath, 'utf8')
+    } catch (missing: unknown) {
+      // A pruned or unreadable run reads as absent.
       return undefined
     }
+    return parseOrUndefined(this.runValidator, raw)
   }
 
   /** Save (create or replace) a run, pruning older runs past `keepRuns`. */
   saveRun(run: CanvasRun): Promise<void> {
     this.assertId(run.runId)
-    const json = JSON.stringify(run)
     return this.lock(run.runId).run(async () => {
-      writeAtomic(path.join(this.runsDir, `${run.runId}.json`), json)
-      const all = this.runsFor(run.graphId, Number.MAX_SAFE_INTEGER)
-      for (const old of all.slice(this.config.keepRuns)) {
+      writeAtomic(path.join(this.runsDir, `${run.runId}.json`), JSON.stringify(run))
+      for (const old of this.runsFor(run.graphId, Number.MAX_SAFE_INTEGER).slice(this.config.keepRuns)) {
         try {
           fs.unlinkSync(path.join(this.runsDir, `${old.runId}.json`))
-        } catch {
-          /* best effort */
+        } catch (unlinkError: unknown) {
+          // Pruning is retried on the next save.
         }
       }
     })
+  }
+
+  /**
+   * Read, change, and write one run under its file lock, so concurrent reports never lose updates.
+   * @param runId - the run to change.
+   * @param mutate - returns the replacement run; it may throw to abort without writing.
+   * @returns the written run.
+   */
+  updateRun(runId: string, mutate: (run: CanvasRun) => CanvasRun): Promise<CanvasRun> {
+    this.assertId(runId)
+    return this.lock(runId).run(async () => {
+      const run = this.getRun(runId)
+      if (run === undefined) throw new Error(`unknown run ${JSON.stringify(runId)}`)
+      const next = mutate(run)
+      writeAtomic(path.join(this.runsDir, `${runId}.json`), JSON.stringify(next))
+      return next
+    })
+  }
+}
+
+/** Parse stored JSON, treating a corrupt or schema-violating file as absent. */
+function parseOrUndefined<T>(validator: Validator<T>, raw: string): T | undefined {
+  try {
+    return validator.parse(JSON.parse(raw))
+  } catch (corrupt: unknown) {
+    // A file edited by hand or from an older build is skipped rather than failing every listing.
+    return undefined
   }
 }
 
