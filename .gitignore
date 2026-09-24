@@ -2,6 +2,7 @@ CLAUDE.local.md
 .env
 *.credentials.yaml
 credentials.yaml
+PLAN.md
 apps/desktop/.env.windows
 apps/desktop/.env.macos
 apps/desktop/*.p12
