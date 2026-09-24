@@ -1,8 +1,9 @@
 /**
- * workflow-canvas: a visual node workflow the model reads and executes. The
- * canvas is a method description for the AI; the model executes steps with
- * existing tools and reports status. Host side wires the store, routes, and the
- * `canvas_workflow` tool.
+ * workflow-canvas: a visual node workflow with two engines. Guided graphs are a
+ * method description the model reads and executes with existing tools,
+ * reporting status through `canvas_workflow`. Strict graphs run in the
+ * workflow engine, which controls the flow and uses a model per step. Host
+ * side wires the store, routes, the strict runner, and the tool.
  *
  * @module @dsh-plugins/token-saver/workflow-canvas
  */
@@ -14,11 +15,13 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-workflow'
 import { NODE_STATUSES, type CanvasRun } from '../protocol.ts'
 import { CanvasStore } from './store.ts'
-import { compileGraph } from './compile.ts'
+import { compileGraph, formatSteps } from './compile.ts'
 import { registerCanvasRoutes } from './routes.ts'
-import { graphSchema, MAX_SUMMARY_CHARS, runSchema } from './schema.ts'
+import { graphSchema, MAX_LOOP_ITERATIONS, MAX_SUMMARY_CHARS, runSchema } from './schema.ts'
+import { StrictRunner } from './strict-runner.ts'
 import { LAUNCH_SESSION_SERVICES } from '../shared/session-launch.ts'
 
 export const name = 'token-saver-workflow-canvas'
@@ -32,6 +35,16 @@ export interface Config {
   maxGraphBytes: number
   /** Runs kept per graph. */
   keepRuns: number
+  /** Agent preset of strict-run Sessions; it must compose a workflow engine. Absent uses the deployment default. */
+  strictAgentPreset?: string
+  /** Child-agent ceiling for one strict run; must not exceed the engine's own ceiling. */
+  maxAgentsPerRun: number
+  /** Longest chain of loop and subflow references a strict run may nest. */
+  maxNestingDepth: number
+  /** Highest round limit a loop node may set. */
+  maxLoopIterations: number
+  /** Longest step output a strict run passes to downstream steps, in characters. */
+  maxStepOutputChars: number
 }
 
 /** Schemastery configuration for the workflow-canvas row. */
@@ -39,6 +52,11 @@ export const Config: z<Config> = z.object({
   storageDir: z.string(),
   maxGraphBytes: z.natural().min(1).default(262144),
   keepRuns: z.natural().min(1).default(20),
+  strictAgentPreset: z.string(),
+  maxAgentsPerRun: z.natural().min(1).default(200),
+  maxNestingDepth: z.natural().min(1).default(4),
+  maxLoopIterations: z.natural().min(1).max(MAX_LOOP_ITERATIONS).default(20),
+  maxStepOutputChars: z.natural().min(200).default(6000),
 })
 
 const CANVAS_DESCRIPTION = 'Work with a visual node workflow (canvas) that a user defined. '
@@ -79,7 +97,13 @@ export function apply(ctx: Context, config: Config): void {
     graphSchema,
     runSchema,
   )
-  registerCanvasRoutes(ctx, store, { maxGraphBytes: config.maxGraphBytes })
+  const limits = { maxDepth: config.maxNestingDepth, maxLoopIterations: config.maxLoopIterations, maxOutputChars: config.maxStepOutputChars }
+  const runner = new StrictRunner(ctx, store, {
+    agentPreset: config.strictAgentPreset,
+    maxAgentsPerRun: config.maxAgentsPerRun,
+    limits,
+  })
+  registerCanvasRoutes(ctx, store, { maxGraphBytes: config.maxGraphBytes, runner, limits })
 
   ctx.tools.register(defineTool({
     name: 'canvas_workflow',
@@ -152,7 +176,7 @@ export function apply(ctx: Context, config: Config): void {
         if (args.graphId === undefined) throw new Error('canvas_workflow start requires graphId')
         const graph = store.get(args.graphId)
         if (graph === undefined) throw new Error(`canvas_workflow: unknown graph ${JSON.stringify(args.graphId)}`)
-        const { steps } = compileGraph(graph)
+        const { steps } = compileGraph(graph, undefined, undefined, id => store.get(id)?.name)
         const now = Date.now()
         const run: CanvasRun = {
           runId: `run-${randomUUID()}`,
@@ -218,12 +242,8 @@ function renderCanvas(value: CanvasValue): string {
     return `Canvas workflows:\n${value.graphs.map(graph => `- ${graph.id}: ${graph.name} (${graph.nodeCount} nodes)${graph.description === '' ? '' : ` — ${graph.description}`}`).join('\n')}`
   }
   if (value.steps !== undefined) {
-    const numbered = value.steps.map((step, index) => {
-      const after = step.dependsOn.length === 0 ? '' : ` (after ${step.dependsOn.join(', ')})`
-      return `${index + 1}. [${step.nodeId}] ${step.kind}: ${step.title}${after}\n   Instruction: ${step.instruction === '' ? '(none)' : step.instruction}\n   How: ${step.hint}`
-    })
     return `Started run ${value.runId ?? ''}. Execute the steps in order; start a step only after the steps it depends on. `
-      + `Report each node with canvas_workflow report (running when you begin, done or failed with a one- or two-sentence summary when you finish):\n${numbered.join('\n')}`
+      + `Report each node with canvas_workflow report (running when you begin, done or failed with a one- or two-sentence summary when you finish):\n${formatSteps(value.steps)}`
   }
   if (value.nodes !== undefined) {
     const lines = Object.entries(value.nodes).map(([id, node]) => {

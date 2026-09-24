@@ -42,6 +42,7 @@
     "@deepseek-ai/dsh-permission-presets": "*",
     "@deepseek-ai/dsh-client-connection": "*",
     "@deepseek-ai/dsh-brand": "*",
-    "@deepseek-ai/dsh-home-paths": "*"
+    "@deepseek-ai/dsh-home-paths": "*",
+    "@deepseek-ai/dsh-workflow": "*"
   }
 }

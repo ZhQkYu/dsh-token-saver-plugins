@@ -12,6 +12,9 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-client-connection'
+import { ROUTES, type CatalogProvider } from '../protocol.ts'
+import { json } from '../shared/http.ts'
 import { BrowserManager, type ResolvedBrowserConfig } from './browser.ts'
 import { ask, delay, WebAiError, type ProviderConfig } from './driver.ts'
 
@@ -153,6 +156,18 @@ function fenceReply(reply: string): string {
  */
 export function apply(ctx: Context, config: Config): void {
   const { providers, browser } = resolveBridgeConfig(config)
+  const catalog: CatalogProvider[] = config.providers.map(provider => ({
+    id: provider.id, displayName: provider.displayName, strengths: provider.strengths, enabled: provider.enabled,
+  }))
+  // Optional: the canvas UI lists providers only where the Web connection exists.
+  ctx.inject(['connection'], (routeCtx) => {
+    routeCtx.connection.fetch.register({
+      path: ROUTES.webAiProviders,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: () => Promise.resolve(json({ providers: catalog })),
+    })
+  })
   if (providers.length === 0) {
     ctx.logger.info('token-saver web-ai-bridge: no provider is enabled; no tools registered')
     return

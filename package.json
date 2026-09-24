@@ -27,6 +27,7 @@
     "@deepseek-ai/dsh-permission-presets": "link:../deepseek-harness/packages/interaction/permission-presets",
     "@deepseek-ai/dsh-client-connection": "link:../deepseek-harness/packages/client/connection",
     "@deepseek-ai/dsh-brand": "link:../deepseek-harness/packages/util/brand",
-    "@deepseek-ai/dsh-home-paths": "link:../deepseek-harness/packages/util/home-paths"
+    "@deepseek-ai/dsh-home-paths": "link:../deepseek-harness/packages/util/home-paths",
+    "@deepseek-ai/dsh-workflow": "link:../deepseek-harness/packages/workflow/workflow"
   }
 }

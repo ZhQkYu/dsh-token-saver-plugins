@@ -52,7 +52,7 @@
 | A | `tool-gate` 工具分组开关 | `tool_gate` | （可选）会话级开关面板 | 按需启停工具组，省上下文 |
 | B | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文 | 新会话出现在侧栏 | 记忆文件 + 会话接力，延长生命周期 |
 | C | `web-ai-bridge` 免费网页 AI 桥 | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口 | 把子任务丢给免费网页 AI |
-| D | `workflow-canvas` 可视化节点工作流 | `canvas_workflow` | 侧栏"工作流画布"页面 | 用流程图描述并执行多步任务 |
+| D | `workflow-canvas` 可视化节点工作流 | `canvas_workflow` | 侧栏"工作流画布"页面 | 用流程图描述并执行多步任务（引导/严格双引擎） |
 
 配套前端 bundle：`@dsh-plugins/token-saver-ui`（在 DSH Web 界面渲染"Plugins 页"与"工作流画布页"）。
 
@@ -144,7 +144,6 @@ pnpm dsh --profile web add github:ZhQkYu/dsh-plugins
 
 ```
 dsh-plugins/
-  PLAN.md                          # 实施计划书
   README.md                        # 本文件（仓库首页）
   package.json                     # 私有 workspace 根
   pnpm-workspace.yaml              # packages: [plugins/*]
@@ -161,7 +160,7 @@ dsh-plugins/
         tool-gate/                 # index + state + reconcile + groups
         session-handoff/           # index + memory + handoff
         web-ai-bridge/             # index + browser + driver + page
-        workflow-canvas/           # index + store + compile + routes
+        workflow-canvas/           # index + store + compile + routes + plan + interpreter + strict-runner + catalog
       scripts/probe-web-ai.mjs     # 网页 AI 选择器探测脚本（开发用）
       tests/*.test.ts
     token-saver-ui/                # @dsh-plugins/token-saver-ui（Client bundle）
@@ -171,6 +170,8 @@ dsh-plugins/
       build.mjs                    # esbuild 打包 + ModuleLoader 包装
       tsconfig.json
       src/client/index.tsx, CanvasPage.tsx
+      src/client/StepNode.tsx, StepEdge.tsx, Inspector.tsx, ToolPicker.tsx   # 画布编辑器组件
+      src/client/kinds.tsx, graph-ops.ts, actions.ts, api.ts, locales.ts, styles.ts
       lib/client.js                # 构建产物
 ```
 
@@ -301,9 +302,22 @@ deepseek 用的是 `ds-*` 设计系统类名（**不带构建哈希后缀**，�
 
 ## 插件 D：workflow-canvas（可视化节点工作流）
 
-**作用：让 AI 用"画流程图"的方式描述任务，然后照着执行。**
+**作用：让 AI 用"画流程图"的方式描述任务，然后用**双引擎**执行。**
 
-画布是"给 AI 的方法说明书"：用户用节点 + 连线描述"用什么工具、什么方式、达到什么目标"，主 Agent 读取编译后的步骤清单并逐节点执行、回报状态。**不新建执行引擎**；执行由主 Agent 用现有工具完成。
+画布是"给 AI 的方法说明书"：用户用节点 + 连线描述"用什么工具、什么方式、达到什么目标"。每个工作流有两种运行模式：
+
+| 模式 | 运行方式 | 适用场景 |
+|---|---|---|
+| `guided`（引导） | 主 Agent 读取编译后的步骤清单，用现有工具逐节点执行、汇报状态 | 流程步骤少、依赖主 Agent 的灵活判断 |
+| `strict`（严格） | 用 `ctx.workflowEngine` 跑一个固定解释器脚本，**模型不驱动流程**，每个步骤一个子 Agent | 流程复杂、需要确定性的控制流（分支/循环/子流程） |
+
+### 节点类型（`src/protocol.ts`）
+
+10 种节点：`input`、`task`、`web-ai`、`subagent`、`tool`、`review`、`output` 是**执行节点**；`condition`、`loop`、`subflow` 是**控制流节点**。
+
+- `condition`（条件分支）：按 `model`（让模型选）或 `rule`（文本规则 `contains`/`equals`/`regex`）决定走哪个分支；每个分支有 `id` + `label`，另有一个 `else` 兜底出口。
+- `loop`（循环）：对某个子工作流循环执行，可设 `maxIterations`（轮数上限）和 `exitRule`（提前退出规则）。
+- `subflow`（子工作流）：引用并运行另一个已保存的工作流，支持嵌套。
 
 ### Config（`cordis.patch.yml`）
 
@@ -312,23 +326,39 @@ deepseek 用的是 `ds-*` 设计系统类名（**不带构建哈希后缀**，�
 | `storageDir` | `~/.dsh/token-saver/canvas` | 存储目录 |
 | `maxGraphBytes` | `262144` | 单图 JSON 上限 |
 | `keepRuns` | `20` | 每图保留最近运行数 |
+| `strictAgentPreset` | （部署默认） | strict 运行 Session 的 agent preset，必须组合出 workflow 引擎 |
+| `maxAgentsPerRun` | `200` | 单次 strict 运行的子 Agent 上限 |
+| `maxNestingDepth` | `4` | loop/subflow 引用的最大嵌套层数 |
+| `maxLoopIterations` | `20` | loop 节点可设置的最高轮数（schema 上限 100） |
+| `maxStepOutputChars` | `6000` | strict 运行时向下游传递的单步输出最长字符数 |
 
 ### 数据模型（`src/protocol.ts`）
 
-`CanvasGraph`（`version: 1`，`nodes` ≤ 200、`edges` ≤ 500，必须是 DAG）、`CanvasRun`（节点状态 `pending/running/done/failed/skipped`）。校验在服务端强制（`compileGraph`）。
+`CanvasGraph`（`version: 1`，`nodes` ≤ 200、`edges` ≤ 500，必须是 DAG）、`CanvasRun`（节点状态 `pending/running/done/failed/skipped`；strict 运行还有 `state: running/done/failed/cancelled/interrupted`）。校验在服务端强制（`compileGraph` + `buildStrictPlan`）。
+
+### 严格执行引擎
+
+- `plan.ts`：从已保存的图构建 `StrictPlan`，解析 loop/subflow 引用，**拒绝缺失、循环、过深**的引用；在 Host 端渲染每个步骤的 prompt。
+- `interpreter.ts`：固定解释器脚本（`interpreterScript()` 把 `interpretPlan` 源码发给引擎），走 DAG，节点输入 settle 即并行运行；condition 按分支路由，loop/subflow 嵌套；每个模型步骤一次 `agent()` 子调用。
+- `strict-runner.ts`：每个 strict 运行一个 idle 根 Session；监听 `workflow/log` 进度行转成 canvas run 记录；持有 live runs 直到 settle 或插件卸载，可取消。
+- `catalog.ts`：列出会话可见的工具（globals + agent preset），供画布 UI 的工具选择器使用。
 
 ### Model Experience
 
-`canvas_workflow` 的 `action`：`list` / `start` / `report` / `status`。`start` 返回编号步骤清单 + 规则："按顺序执行；依赖完成后再执行；每个节点开始时 report running，结束时 report done/failed 并附一两句摘要"。
+`canvas_workflow` 的 `action`：`list` / `start` / `report` / `status`。
+- **guided**：`start` 返回编号步骤清单 + 规则："按顺序执行；依赖完成后再执行；每个节点开始时 report running，结束时 report done/failed 并附一两句摘要"。
+- **strict**：`start` 由引擎直接跑图，模型不参与流程编排，只完成每个步骤。
 
 ### Host 路由
 
 全部走 `ctx.connection.fetch.register`（带 Connection 鉴权围栏 + cookie），路径：
-`/api/token-saver/canvas.graphs`、`canvas.graph`、`canvas.delete`、`canvas.runs`、`canvas.run`、`canvas.workspaces`。`canvas.run` 用 `launchSession` 在新会话中执行。
+`/api/token-saver/canvas.graphs`、`canvas.graph`、`canvas.delete`、`canvas.runs`、`canvas.run`、`canvas.cancel`、`canvas.workspaces`、`web-ai.providers`（画布 UI 列 provider 用）。`canvas.run` 用 `launchSession` 在新会话中执行。
 
 ### Known Limitations
 
-- 执行依赖主模型遵循步骤清单，不是确定性引擎；运行状态只在 Web 模式可见。
+- **guided**：执行依赖主模型遵循步骤清单，不是确定性引擎。
+- **strict**：每个步骤一次模型调用，代价较高；引擎运行依赖部署的 workflow 引擎与 `strictAgentPreset`。
+- 运行状态只在 Web 模式可见。
 
 ---
 
@@ -337,7 +367,9 @@ deepseek 用的是 `ds-*` 设计系统类名（**不带构建哈希后缀**，�
 `@dsh-plugins/token-saver-ui` 提供 DSH Web 侧栏的两个入口：
 
 - **Plugins 页**：能看到并开关 4 个组件（Tool Gate / Session Handoff / Web AI Bridge / Workflow Canvas）。
-- **Workflow Canvas 页**：左侧工作流列表；顶栏"新建 / 保存 / 选择节点类型 + 添加节点 / 选择工作区 + 运行"；中间画布拖拽节点、从节点边缘拖出连线、选中后按 Backspace/Delete 删除；右侧检查器编辑节点类型、标题、指令（网页 AI 节点填 provider，工具节点填工具名）。"运行"会先保存，再在所选工作区新建会话执行；执行期间每 2 秒刷新节点状态（执行中/完成/失败/跳过），选中节点可查看执行结果摘要。
+- **Workflow Canvas 页**：左侧工作流列表；顶栏"新建 / 保存 / 选择节点类型 + 添加节点 / 选择工作区 + 运行"；中间画布拖拽节点、从节点边缘拖出连线、选中后按 Backspace/Delete 删除，节点选中时浮出复制/删除工具条；右侧检查器（Inspector）编辑工作流（名称/描述/运行模式）或节点（类型、标题、指令，以及类型专属编辑：condition 的分支 + 规则、loop/subflow 的子工作流引用、web-ai 的 provider、tool 的工具名）。"运行"会先保存，再在所选工作区新建会话执行；执行期间每 2 秒刷新节点状态（执行中/完成/失败/跳过），选中节点可查看执行结果摘要。
+
+画布编辑器使用自定义节点/边渲染（`StepNode.tsx`、`StepEdge.tsx`）：每种节点有专属颜色与图标（`kinds.tsx`），condition 节点右侧按分支伸出多个输出句柄，执行/循环状态以徽标显示。`graph-ops.ts` 提供纯图操作（环检测、分支边整理、自动布局）。
 
 ---
 
@@ -362,7 +394,7 @@ pnpm run test        # vitest run
 pnpm run build       # 产出 lib/ + client.js
 ```
 
-单测覆盖：glob、tool-gate 投影 fold、tool-gate reconcile、memory 路径逃逸/截断、handoff 文件、canvas 编译（拓扑/环/提示）、canvas 存储（保存/删除/修剪/并发写）、web-ai-bridge driver。
+单测覆盖：glob、tool-gate 投影 fold、tool-gate reconcile、memory 路径逃逸/截断、handoff 文件、canvas 编译（拓扑/环/提示/控制流校验）、canvas 存储（保存/删除/修剪/并发写）、web-ai-bridge driver、**strict 严格执行解释器**（并行分支/条件路由/循环/子流程）、**工具目录**（catalog）。
 
 ---
 

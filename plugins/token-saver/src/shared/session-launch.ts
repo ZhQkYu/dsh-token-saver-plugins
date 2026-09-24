@@ -13,7 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { createUserMessage, errorChain, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -33,8 +33,8 @@ export interface LaunchSessionRequest {
   cwd: string
   /** New Session title. */
   title: string
-  /** First user message text, which starts the run. */
-  prompt: string
+  /** First user message text, which starts the run; absent leaves the Agent idle. */
+  prompt?: string
   /** Message attribution for the first message. */
   source: UserMessage['source']
   /** Agent preset to mount; when absent the deployment default is resolved. */
@@ -67,15 +67,22 @@ function installInitialModelSelection(agentCtx: Context, selection: ModelSelecti
   })
 }
 
+/** A launched Session and the Agent handle the launching `ctx` holds for it. */
+export interface LaunchedSession {
+  sessionId: SessionId
+  /** Disposing it releases this plugin's reference; the Session stays persisted. */
+  handle: AgentHandle
+}
+
 /**
- * Create, attach, title, configure, and prompt one ordinary root Session.
+ * Create, attach, title, configure, and optionally prompt one ordinary root Session.
  * On any failure the created Session is detached and the Agent disposed before
  * rethrowing, leaving no partial state.
  * @param ctx - runtime context that owns the resulting Agent.
  * @param request - creation inputs.
- * @returns the new Session id.
+ * @returns the new Session id and its Agent handle.
  */
-export async function launchSession(ctx: Context, request: LaunchSessionRequest): Promise<SessionId> {
+export async function launchSession(ctx: Context, request: LaunchSessionRequest): Promise<LaunchedSession> {
   const signal = request.signal ?? new AbortController().signal
   const preset = await ctx.agentPresets.resolve(request.agentPreset)
   await using presetScope = await ctx.agentPresets.acquireScope(preset.id)
@@ -108,10 +115,12 @@ export async function launchSession(ctx: Context, request: LaunchSessionRequest)
       ctx.permissionPresets.set(handle.agent.session, request.permissionPreset)
     }
     ctx.sessionTitle.rename(handle.agent.session, request.title)
-    handle.agent.followup(createUserMessage({
-      content: [{ type: 'text', text: request.prompt }],
-      source: request.source,
-    }))
+    if (request.prompt !== undefined) {
+      handle.agent.followup(createUserMessage({
+        content: [{ type: 'text', text: request.prompt }],
+        source: request.source,
+      }))
+    }
   } catch (error: unknown) {
     if (attached) {
       try {
@@ -127,5 +136,5 @@ export async function launchSession(ctx: Context, request: LaunchSessionRequest)
     }
     throw error
   }
-  return sessionId
+  return { sessionId, handle }
 }

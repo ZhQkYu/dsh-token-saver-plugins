@@ -199,7 +199,7 @@ export function apply(ctx: Context, config: Config): void {
         : undefined
 
       const prompt = `${summary}${args.nextPrompt?.trim() ? `\n\n${args.nextPrompt.trim()}` : ''}`
-      const newSessionId = await launchSession(ctx, {
+      const { sessionId: newSessionId } = await launchSession(ctx, {
         cwd,
         title,
         prompt,

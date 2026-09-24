@@ -6,7 +6,7 @@
  * @module @dsh-plugins/token-saver-ui/client/api
  */
 
-import type { CanvasGraph, CanvasRun } from '@dsh-plugins/token-saver/protocol'
+import type { CanvasGraph, CanvasRun, CatalogProvider, CatalogTool, GraphMode } from '@dsh-plugins/token-saver/protocol'
 
 /** One graph row in the list. */
 export interface GraphSummary {
@@ -14,7 +14,11 @@ export interface GraphSummary {
   name: string
   description: string
   nodeCount: number
+  mode: GraphMode
 }
+
+/** What starting a run returns; strict runs are tracked by `runId` from the start. */
+export type RunStarted = { mode: 'guided'; sessionId: string } | { mode: 'strict'; sessionId: string; runId: string }
 
 /** One workspace the run can start in. */
 export interface WorkspaceSummary {
@@ -39,8 +43,12 @@ export const api = {
   save: (graph: CanvasGraph) => post<{ graph: CanvasGraph }>('api/token-saver/canvas.graph', graph).then(res => res.graph),
   remove: (id: string) => post<{ ok: true }>('api/token-saver/canvas.delete', { id }),
   runs: (graphId: string) => request<{ runs: CanvasRun[] }>(`api/token-saver/canvas.runs?graphId=${encodeURIComponent(graphId)}`).then(res => res.runs),
-  run: (graphId: string, workspaceId: string) => post<{ sessionId: string }>('api/token-saver/canvas.run', { graphId, workspaceId }).then(res => res.sessionId),
+  run: (graphId: string, workspaceId: string, input: string) => post<RunStarted>('api/token-saver/canvas.run', { graphId, workspaceId, ...(input === '' ? {} : { input }) }),
+  cancel: (runId: string) => post<{ ok: true }>('api/token-saver/canvas.cancel', { runId }),
   workspaces: () => request<{ workspaces: WorkspaceSummary[] }>('api/token-saver/canvas.workspaces').then(res => res.workspaces),
+  tools: () => request<{ tools: CatalogTool[] }>('api/token-saver/canvas.tools').then(res => res.tools),
+  // 404 while the web-ai-bridge row is disabled.
+  providers: () => request<{ providers: CatalogProvider[] }>('api/token-saver/web-ai.providers').then(res => res.providers),
 }
 
 /** Error text for display. */

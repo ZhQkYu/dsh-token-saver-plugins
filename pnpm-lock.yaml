@@ -50,6 +50,9 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: link:../deepseek-harness/packages/core/tools
         version: link:../deepseek-harness/packages/core/tools
+      '@deepseek-ai/dsh-workflow':
+        specifier: link:../deepseek-harness/packages/workflow/workflow
+        version: link:../deepseek-harness/packages/workflow/workflow
       '@deepseek-ai/dsh-workspace':
         specifier: link:../deepseek-harness/packages/workspace/workspace
         version: link:../deepseek-harness/packages/workspace/workspace
