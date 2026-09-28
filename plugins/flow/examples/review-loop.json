@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "id": "review-loop",
+  "name": "Review loop",
+  "description": "Review and revise a draft until the reviewer approves, at most 5 rounds.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "fields": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "loop",
+      "type": "loop",
+      "title": "Review rounds",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "data": {
+        "mode": "infinite",
+        "maxIterations": 5,
+        "variables": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "initial": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "outputs": []
+      },
+      "size": {
+        "width": 620,
+        "height": 260
+      }
+    },
+    {
+      "id": "review",
+      "type": "llm",
+      "title": "Review",
+      "position": {
+        "x": 40,
+        "y": 80
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "loop",
+              "source": "inner",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "system": "You are a strict editor.",
+        "prompt": "Review this draft. If it is ready, set ok to true. Otherwise set ok to false and return an improved version in revised.\n\n{{draft}}",
+        "output": {
+          "format": "json",
+          "fields": [
+            {
+              "name": "ok",
+              "schema": {
+                "type": "boolean"
+              },
+              "required": true
+            },
+            {
+              "name": "revised",
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "parentId": "loop"
+    },
+    {
+      "id": "approved",
+      "type": "condition",
+      "title": "Approved?",
+      "position": {
+        "x": 260,
+        "y": 80
+      },
+      "data": {
+        "branches": [
+          {
+            "id": "yes",
+            "label": "ok",
+            "logic": "and",
+            "conditions": [
+              {
+                "left": {
+                  "kind": "ref",
+                  "node": "review",
+                  "source": "output",
+                  "path": [
+                    "ok"
+                  ]
+                },
+                "op": "is_true"
+              }
+            ]
+          }
+        ]
+      },
+      "parentId": "loop"
+    },
+    {
+      "id": "done",
+      "type": "break",
+      "title": "Done",
+      "position": {
+        "x": 460,
+        "y": 30
+      },
+      "data": {},
+      "parentId": "loop"
+    },
+    {
+      "id": "revise",
+      "type": "assign",
+      "title": "Keep revision",
+      "position": {
+        "x": 460,
+        "y": 150
+      },
+      "data": {
+        "assignments": [
+          {
+            "variable": "draft",
+            "value": {
+              "kind": "ref",
+              "node": "review",
+              "source": "output",
+              "path": [
+                "revised"
+              ]
+            }
+          }
+        ]
+      },
+      "parentId": "loop"
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "End",
+      "position": {
+        "x": 940,
+        "y": 0
+      },
+      "data": {
+        "mode": "variables",
+        "inputs": [
+          {
+            "name": "final",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "loop",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "start",
+      "sourceHandle": "next",
+      "target": "loop"
+    },
+    {
+      "id": "e2",
+      "source": "loop",
+      "sourceHandle": "body",
+      "target": "review"
+    },
+    {
+      "id": "e3",
+      "source": "review",
+      "sourceHandle": "next",
+      "target": "approved"
+    },
+    {
+      "id": "e4",
+      "source": "approved",
+      "sourceHandle": "yes",
+      "target": "done"
+    },
+    {
+      "id": "e5",
+      "source": "approved",
+      "sourceHandle": "else",
+      "target": "revise"
+    },
+    {
+      "id": "e6",
+      "source": "loop",
+      "sourceHandle": "next",
+      "target": "end"
+    }
+  ],
+  "revision": 1,
+  "updatedAt": 0
+}

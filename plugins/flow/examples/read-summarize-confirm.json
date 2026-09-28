@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "id": "read-summarize-confirm",
+  "name": "Read, summarize, confirm",
+  "description": "Read a file with the read tool, summarize it with an agent, and ask the user to confirm. Publish it as a tool to call it from a conversation.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "fields": [
+          {
+            "name": "file_path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "read",
+      "type": "tool",
+      "title": "Read file",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "data": {
+        "tool": "read",
+        "args": [
+          {
+            "name": "file_path",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "file_path"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "summarize",
+      "type": "agent",
+      "title": "Summarize",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "content",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "read",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ],
+        "prompt": "Summarize this file in five bullet points:\n\n{{content}}"
+      }
+    },
+    {
+      "id": "confirm",
+      "type": "question",
+      "title": "Confirm",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "summary",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "summarize",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ],
+        "question": "Is this summary accurate?\n\n{{summary}}",
+        "answer": {
+          "kind": "options",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "allowOther": true
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "End",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "data": {
+        "mode": "variables",
+        "inputs": [
+          {
+            "name": "summary",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "summarize",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          },
+          {
+            "name": "confirmed",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "confirm",
+              "source": "output",
+              "path": [
+                "answer"
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "start",
+      "sourceHandle": "next",
+      "target": "read"
+    },
+    {
+      "id": "e2",
+      "source": "read",
+      "sourceHandle": "next",
+      "target": "summarize"
+    },
+    {
+      "id": "e3",
+      "source": "summarize",
+      "sourceHandle": "next",
+      "target": "confirm"
+    },
+    {
+      "id": "e4",
+      "source": "confirm",
+      "sourceHandle": "yes",
+      "target": "end"
+    },
+    {
+      "id": "e5",
+      "source": "confirm",
+      "sourceHandle": "no",
+      "target": "end"
+    },
+    {
+      "id": "e6",
+      "source": "confirm",
+      "sourceHandle": "other",
+      "target": "end"
+    }
+  ],
+  "revision": 1,
+  "updatedAt": 0
+}

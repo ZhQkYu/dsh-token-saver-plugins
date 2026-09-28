@@ -1,0 +1,281 @@
+{
+  "schemaVersion": 1,
+  "id": "http-check",
+  "name": "HTTP check",
+  "description": "Fetch a JSON URL, branch on the status, summarize with code or report the failure, and merge the branches.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "fields": [
+          {
+            "name": "url",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "default": "https://api.github.com/repos/nodejs/node"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fetch",
+      "type": "http",
+      "title": "Fetch",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "url",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "url"
+              ]
+            }
+          }
+        ],
+        "method": "GET",
+        "url": "{{url}}",
+        "headers": [
+          {
+            "name": "accept",
+            "value": "application/json"
+          }
+        ],
+        "query": [],
+        "body": {
+          "kind": "none"
+        }
+      }
+    },
+    {
+      "id": "ok",
+      "type": "condition",
+      "title": "Status 200?",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "data": {
+        "branches": [
+          {
+            "id": "ok",
+            "label": "200",
+            "logic": "and",
+            "conditions": [
+              {
+                "left": {
+                  "kind": "ref",
+                  "node": "fetch",
+                  "source": "output",
+                  "path": [
+                    "status"
+                  ]
+                },
+                "op": "eq",
+                "right": {
+                  "kind": "literal",
+                  "value": 200
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "summarize",
+      "type": "code",
+      "title": "Summarize",
+      "position": {
+        "x": 720,
+        "y": -80
+      },
+      "data": {
+        "language": "typescript",
+        "inputs": [
+          {
+            "name": "json",
+            "schema": {
+              "type": "any"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "fetch",
+              "source": "output",
+              "path": [
+                "json"
+              ]
+            }
+          }
+        ],
+        "code": "async function main({ params }: { params: Record<string, any> }) {\n  const keys = params.json && typeof params.json === 'object' ? Object.keys(params.json) : []\n  return { summary: `${keys.length} top-level fields: ${keys.slice(0, 8).join(', ')}` }\n}",
+        "outputs": [
+          {
+            "name": "summary",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "failed",
+      "type": "message",
+      "title": "Report failure",
+      "position": {
+        "x": 720,
+        "y": 80
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "status",
+            "schema": {
+              "type": "integer"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "fetch",
+              "source": "output",
+              "path": [
+                "status"
+              ]
+            }
+          }
+        ],
+        "template": "Request failed with HTTP {{status}}."
+      }
+    },
+    {
+      "id": "merge",
+      "type": "aggregate",
+      "title": "Merge",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "data": {
+        "groups": [
+          {
+            "name": "result",
+            "schema": {
+              "type": "string"
+            },
+            "candidates": [
+              {
+                "kind": "ref",
+                "node": "summarize",
+                "source": "output",
+                "path": [
+                  "summary"
+                ]
+              },
+              {
+                "kind": "ref",
+                "node": "failed",
+                "source": "output",
+                "path": [
+                  "text"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "End",
+      "position": {
+        "x": 1200,
+        "y": 0
+      },
+      "data": {
+        "mode": "variables",
+        "inputs": [
+          {
+            "name": "result",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "merge",
+              "source": "output",
+              "path": [
+                "result"
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "start",
+      "sourceHandle": "next",
+      "target": "fetch"
+    },
+    {
+      "id": "e2",
+      "source": "fetch",
+      "sourceHandle": "next",
+      "target": "ok"
+    },
+    {
+      "id": "e3",
+      "source": "ok",
+      "sourceHandle": "ok",
+      "target": "summarize"
+    },
+    {
+      "id": "e4",
+      "source": "ok",
+      "sourceHandle": "else",
+      "target": "failed"
+    },
+    {
+      "id": "e5",
+      "source": "summarize",
+      "sourceHandle": "next",
+      "target": "merge"
+    },
+    {
+      "id": "e6",
+      "source": "failed",
+      "sourceHandle": "next",
+      "target": "merge"
+    },
+    {
+      "id": "e7",
+      "source": "merge",
+      "sourceHandle": "next",
+      "target": "end"
+    }
+  ],
+  "revision": 1,
+  "updatedAt": 0
+}

@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "id": "topic-outline",
+  "name": "Topic outline",
+  "description": "LLM outline, then expand every item in parallel with a batch.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "fields": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "outline",
+      "type": "llm",
+      "title": "Outline",
+      "position": {
+        "x": 260,
+        "y": 0
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          }
+        ],
+        "system": "You write concise outlines.",
+        "prompt": "List 3 to 5 section titles for an article about {{topic}}.",
+        "output": {
+          "format": "json",
+          "fields": [
+            {
+              "name": "items",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "expand",
+      "type": "batch",
+      "title": "Expand sections",
+      "position": {
+        "x": 520,
+        "y": 0
+      },
+      "data": {
+        "array": {
+          "kind": "ref",
+          "node": "outline",
+          "source": "output",
+          "path": [
+            "items"
+          ]
+        },
+        "concurrency": 3,
+        "maxItems": 10,
+        "outputs": [
+          {
+            "name": "sections",
+            "value": {
+              "kind": "ref",
+              "node": "write",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ]
+      },
+      "size": {
+        "width": 420,
+        "height": 220
+      }
+    },
+    {
+      "id": "write",
+      "type": "llm",
+      "title": "Write section",
+      "position": {
+        "x": 40,
+        "y": 70
+      },
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          },
+          {
+            "name": "title",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "expand",
+              "source": "inner",
+              "path": [
+                "item"
+              ]
+            }
+          }
+        ],
+        "system": "",
+        "prompt": "Write one paragraph for the section \"{{title}}\" of an article about {{topic}}.",
+        "output": {
+          "format": "text"
+        }
+      },
+      "parentId": "expand"
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "End",
+      "position": {
+        "x": 1000,
+        "y": 0
+      },
+      "data": {
+        "mode": "variables",
+        "inputs": [
+          {
+            "name": "outline",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "value": {
+              "kind": "ref",
+              "node": "outline",
+              "source": "output",
+              "path": [
+                "items"
+              ]
+            }
+          },
+          {
+            "name": "sections",
+            "schema": {
+              "type": "array"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "expand",
+              "source": "output",
+              "path": [
+                "sections"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "start",
+      "sourceHandle": "next",
+      "target": "outline"
+    },
+    {
+      "id": "e2",
+      "source": "outline",
+      "sourceHandle": "next",
+      "target": "expand"
+    },
+    {
+      "id": "e3",
+      "source": "expand",
+      "sourceHandle": "body",
+      "target": "write"
+    },
+    {
+      "id": "e4",
+      "source": "expand",
+      "sourceHandle": "next",
+      "target": "end"
+    }
+  ],
+  "revision": 1,
+  "updatedAt": 0
+}
