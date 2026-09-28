@@ -7,6 +7,7 @@
  */
 
 import type { FlowDocument, FlowLookup, FlowNode, VarField, VarType } from './types.ts'
+import { specOf } from './nodes/index.ts'
 
 /** The root scope marker. */
 export const ROOT_SCOPE = 'root'
@@ -25,65 +26,94 @@ export function nodesInScope(doc: FlowDocument, scope: string): FlowNode[] {
 /** The container chain containing a node, outermost first. */
 export function containerChainOf(doc: FlowDocument, nodeId: string): string[] {
   const chain: string[] = []
+  const seen = new Set<string>()
   let current: string | undefined = nodeById(doc, nodeId)?.parentId
-  while (current !== undefined) {
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current)
     chain.unshift(current)
     current = nodeById(doc, current)?.parentId
   }
   return chain
 }
 
+/** Precomputed same-scope ancestry for one document; build once per validation or render. */
+export interface ScopeIndex {
+  /** Same-scope nodes with a directed path to `nodeId` (excluding `nodeId`). */
+  ancestors(nodeId: string): ReadonlySet<string>
+}
+
 /**
- * Whether `from` can reach `to` in the same scope through directed edges.
- * Used to decide whether `from`'s output has finished before `to` runs.
+ * Build a {@link ScopeIndex}. Only edges whose endpoints share a scope count;
+ * `body` edges cross into a container and never make a node an ancestor.
+ * @param doc - the flow document.
+ * @returns the memoized index.
  */
-export function canReach(doc: FlowDocument, from: string, to: string): boolean {
-  if (from === to) return false
-  const scope = scopeOf(doc, from)
-  const adjacency = buildAdjacency(doc, scope)
-  const visited = new Set<string>()
-  const stack = [...(adjacency.get(from) ?? [])]
-  while (stack.length > 0) {
-    const current = stack.pop() as string
-    if (current === to) return true
-    if (visited.has(current)) continue
-    visited.add(current)
-    const next = adjacency.get(current)
-    if (next !== undefined) stack.push(...next)
+export function buildScopeIndex(doc: FlowDocument): ScopeIndex {
+  const scopeById = new Map(doc.nodes.map(node => [node.id, node.parentId ?? ROOT_SCOPE]))
+  const reverse = new Map<string, string[]>()
+  for (const edge of doc.edges) {
+    const sourceScope = scopeById.get(edge.source)
+    if (edge.sourceHandle === 'body' || sourceScope === undefined || sourceScope !== scopeById.get(edge.target)) continue
+    const list = reverse.get(edge.target) ?? []
+    list.push(edge.source)
+    reverse.set(edge.target, list)
   }
-  return false
+  const memo = new Map<string, Set<string>>()
+  return {
+    ancestors(nodeId) {
+      const cached = memo.get(nodeId)
+      if (cached !== undefined) return cached
+      const out = new Set<string>()
+      const stack = [...(reverse.get(nodeId) ?? [])]
+      while (stack.length > 0) {
+        const current = stack.pop() as string
+        if (out.has(current)) continue
+        out.add(current)
+        stack.push(...(reverse.get(current) ?? []))
+      }
+      out.delete(nodeId)
+      memo.set(nodeId, out)
+      return out
+    },
+  }
+}
+
+/** Whether `from` can reach `to` in the same scope through directed edges. */
+export function canReach(doc: FlowDocument, from: string, to: string, index: ScopeIndex = buildScopeIndex(doc)): boolean {
+  return from !== to && index.ancestors(to).has(from)
+}
+
+/** Options for {@link visibleOutputNodes}. */
+export interface VisibilityOptions {
+  /**
+   * Whether a container node may see its own body nodes. Only a container's
+   * `outputs[].value` collects body results; its array/count/initial values
+   * are resolved outside the body and must not.
+   */
+  includeOwnBody?: boolean
+  index?: ScopeIndex
 }
 
 /**
  * The node ids whose outputs are referable from `nodeId`: same-scope ancestors,
  * plus each outer container's ancestors in its parent scope.
  */
-export function visibleOutputNodes(doc: FlowDocument, nodeId: string): Set<string> {
-  const out = new Set<string>()
-  const ownScope = scopeOf(doc, nodeId)
-  // Same-scope ancestors.
-  for (const node of nodesInScope(doc, ownScope)) {
-    if (node.id !== nodeId && canReach(doc, node.id, nodeId)) out.add(node.id)
-  }
-  // A container node can reference the outputs of its own body scope (its
-  // `outputs[].value` collect body-node results).
+export function visibleOutputNodes(doc: FlowDocument, nodeId: string, options: VisibilityOptions = {}): Set<string> {
+  const index = options.index ?? buildScopeIndex(doc)
+  const out = new Set<string>(index.ancestors(nodeId))
   const self = nodeById(doc, nodeId)
-  if (self?.type === 'loop' || self?.type === 'batch') {
+  if ((options.includeOwnBody ?? true) && (self?.type === 'loop' || self?.type === 'batch')) {
     for (const node of nodesInScope(doc, nodeId)) out.add(node.id)
   }
-  // Outer containers' ancestors.
   for (const containerId of containerChainOf(doc, nodeId)) {
-    const parentScope = scopeOf(doc, containerId)
-    for (const node of nodesInScope(doc, parentScope)) {
-      if (node.id !== containerId && canReach(doc, node.id, containerId)) out.add(node.id)
-    }
+    for (const ancestor of index.ancestors(containerId)) out.add(ancestor)
   }
   return out
 }
 
 /** Whether a node id's output is visible (referable) from `nodeId`. */
-export function isVisibleOutput(doc: FlowDocument, sourceId: string, nodeId: string): boolean {
-  return visibleOutputNodes(doc, nodeId).has(sourceId)
+export function isVisibleOutput(doc: FlowDocument, sourceId: string, nodeId: string, options: VisibilityOptions = {}): boolean {
+  return visibleOutputNodes(doc, nodeId, options).has(sourceId)
 }
 
 /** A group of variables offered to a picker. */
@@ -92,44 +122,34 @@ export interface VarGroup {
   /** Node outputs in this group. */
   nodes: { nodeId: string; nodeTitle: string; nodeType: string; outputs: VarField[] }[]
   /** Container inner variables, present only for the innermost container group. */
-  inner?: VarField[]
+  inner?: { containerId: string; fields: VarField[] }
 }
 
 /**
  * The variables a node can reference, grouped by source: same-scope ancestors,
  * outer container-chain ancestors, and the containing container's inner vars.
  */
-export function availableVariables(doc: FlowDocument, nodeId: string, _lookup: FlowLookup): VarGroup[] {
+export function availableVariables(doc: FlowDocument, nodeId: string, lookup: FlowLookup, index: ScopeIndex = buildScopeIndex(doc)): VarGroup[] {
   const groups: VarGroup[] = []
-  const ownScope = scopeOf(doc, nodeId)
+  const describe = (ids: ReadonlySet<string>): VarGroup['nodes'] => doc.nodes
+    .filter(node => ids.has(node.id) && specOf(node).executable)
+    .map(node => ({ nodeId: node.id, nodeTitle: node.title, nodeType: node.type, outputs: specOf(node).outputs(node, lookup) }))
 
-  const sameScopeGroup: VarGroup = { label: 'same scope', nodes: [] }
-  for (const node of nodesInScope(doc, ownScope)) {
-    if (node.id !== nodeId && canReach(doc, node.id, nodeId)) {
-      sameScopeGroup.nodes.push({ nodeId: node.id, nodeTitle: node.title, nodeType: node.type, outputs: outputsOf(node) })
-    }
-  }
-  if (sameScopeGroup.nodes.length > 0) groups.push(sameScopeGroup)
+  const same = describe(index.ancestors(nodeId))
+  if (same.length > 0) groups.push({ label: 'same scope', nodes: same })
 
   const chain = containerChainOf(doc, nodeId)
   for (const containerId of chain) {
-    const parentScope = scopeOf(doc, containerId)
-    const group: VarGroup = { label: `outer ${containerId}`, nodes: [] }
-    for (const node of nodesInScope(doc, parentScope)) {
-      if (node.id !== containerId && canReach(doc, node.id, containerId)) {
-        group.nodes.push({ nodeId: node.id, nodeTitle: node.title, nodeType: node.type, outputs: outputsOf(node) })
-      }
-    }
-    if (group.nodes.length > 0) groups.push(group)
+    const outer = describe(index.ancestors(containerId))
+    if (outer.length > 0) groups.push({ label: `outer ${containerId}`, nodes: outer })
   }
 
-  // Innermost container inner variables.
   const innermost = chain[chain.length - 1]
   if (innermost !== undefined) {
     const container = nodeById(doc, innermost)
-    if (container !== undefined && (container.type === 'loop' || container.type === 'batch')) {
-      const inner = innerVarsOf(container)
-      if (inner.length > 0) groups.push({ label: `inner ${innermost}`, nodes: [], inner })
+    if (container !== undefined) {
+      const fields = innerVarsOf(container)
+      if (fields.length > 0) groups.push({ label: `inner ${innermost}`, nodes: [], inner: { containerId: innermost, fields } })
     }
   }
   return groups
@@ -146,37 +166,10 @@ function innerVarsOf(container: FlowNode): VarField[] {
   return []
 }
 
-function outputsOf(node: FlowNode): VarField[] {
-  // Lightweight: return node data outputs where statically derivable.
-  switch (node.type) {
-    case 'start': return node.data.fields.map(f => ({ name: f.name, schema: f.schema, ...(f.required === undefined ? {} : { required: f.required }) }))
-    case 'llm': return node.data.output.format === 'json' ? node.data.output.fields : [{ name: 'text', schema: { type: 'string' } }]
-    case 'code': return node.data.outputs
-    case 'end': return []
-    case 'comment': return []
-    default: return []
-  }
-}
-
-function buildAdjacency(doc: FlowDocument, scope: string): Map<string, string[]> {
-  const adjacency = new Map<string, string[]>()
-  const scopeNodes = new Set(nodesInScope(doc, scope).map(n => n.id))
-  for (const edge of doc.edges) {
-    if (!scopeNodes.has(edge.source) || !scopeNodes.has(edge.target)) continue
-    const list = adjacency.get(edge.source) ?? []
-    list.push(edge.target)
-    adjacency.set(edge.source, list)
-  }
-  return adjacency
-}
-
 /** Look up a node by id. */
 export function nodeById(doc: FlowDocument, nodeId: string): FlowNode | undefined {
   return doc.nodes.find(node => node.id === nodeId)
 }
-
-/** The inner variable types a container exposes. */
-export type InnerVarKind = 'item' | 'index' | string
 
 /** Resolve the inner variable schema of a container. */
 export function innerVarSchema(container: FlowNode, name: string): VarType | undefined {

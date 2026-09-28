@@ -5,20 +5,19 @@
  * @module @dsh-plugins/flow/host/executors/intent
  */
 
-import { BlockAssembler, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, type GenerateOptions, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { FlowNode } from '../../spec/types.ts'
 import { renderTemplate } from '../../spec/template.ts'
 import { NodeError } from '../engine/budget.ts'
-import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
+import { toUsageLite, type ExecResult, type NodeExecutor } from './index.ts'
 
 type IntentNode = Extract<FlowNode, { type: 'intent' }>
 
 /** The intent executor. */
 export const intentExecutor: NodeExecutor<IntentNode> = {
   type: 'intent',
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
-    const values = resolveInputs(node, ctx.frame)
+  async execute(node, inputs, ctx): Promise<ExecResult> {
+    const values = inputs
     const query = renderTemplate(node.data.query, values).text
     const selection = node.data.model ?? ctx.services.defaultModel()
     const intentsList = node.data.intents.map(intent => `- ${intent.id}: ${intent.label}${intent.description ? ` (${intent.description})` : ''}`).join('\n')
@@ -31,10 +30,13 @@ export const intentExecutor: NodeExecutor<IntentNode> = {
       messages: [{ role: 'user', content: [{ type: 'text', text: query }] }],
       signal: ctx.signal,
     }
+    ctx.budget.consumeLlmCall()
     const assembler = new BlockAssembler()
+    let usage: TokenUsage | undefined
     try {
       for await (const chunk of ctx.services.llm.stream(options)) {
         assembler.push(chunk)
+        if (chunk.type === 'usage') usage = chunk.usage
       }
     } catch (error: unknown) {
       throw new NodeError('LLM_STREAM', error instanceof Error ? error.message : String(error))
@@ -43,18 +45,31 @@ export const intentExecutor: NodeExecutor<IntentNode> = {
       throw new NodeError(`LLM_FINISH_${assembler.finish.kind.toUpperCase()}`, `model finished with ${assembler.finish.kind}`)
     }
     const text = assembler.blocks().filter(block => block.type === 'text').map(block => (block as { text: string }).text).join('')
-    ctx.budget.consumeLlmCall()
     const parsed = tryParseJson(text)
-    let intent = ''
+    let intentId = ''
     let reason = ''
+    let parseFailed = false
     if (parsed !== null && typeof parsed === 'object') {
       const record = parsed as Record<string, unknown>
-      intent = typeof record['intent'] === 'string' ? record['intent'] : ''
+      intentId = typeof record['intent'] === 'string' ? record['intent'] : ''
       reason = typeof record['reason'] === 'string' ? record['reason'] : ''
+    } else {
+      parseFailed = true
+      reason = 'intent classification returned non-JSON output'
     }
-    const matched = node.data.intents.some(entry => entry.id === intent)
-    const firedPort = matched ? intent : 'other'
-    return { outputs: { intent: matched ? intent : 'other', reason }, firedPorts: [firedPort] }
+    const matched = node.data.intents.find(entry => entry.id === intentId)
+    const firedPort = matched === undefined ? 'other' : matched.id
+    return {
+      outputs: {
+        intent: matched === undefined ? 'other' : matched.label,
+        intentId: matched === undefined ? 'other' : matched.id,
+        reason,
+        ...(parseFailed ? { parseFailed } : {}),
+      },
+      firedPorts: [firedPort],
+      ...(usage === undefined ? {} : { usage: toUsageLite(usage) }),
+      rendered: { system, prompt: query },
+    }
   },
 }
 

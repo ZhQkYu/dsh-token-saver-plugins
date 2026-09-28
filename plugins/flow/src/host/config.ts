@@ -29,8 +29,8 @@ export interface Config {
   maxBatchItems: number
   maxBatchConcurrency: number
   maxRegexInputChars: number
-  code: { timeoutMs: number; sandboxMode: string }
-  http: { timeoutMs: number; maxResponseBytes: number; allowPrivateNetwork: boolean; allowedHosts: string[] }
+  code: { timeoutMs: number; sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access' }
+  http: { timeoutMs: number; maxResponseBytes: number; maxRedirects: number; allowPrivateNetwork: boolean; allowedHosts: string[] }
   agent: { provider: string }
   tools: { prefix: string }
 }
@@ -59,11 +59,12 @@ export const Config: z<Config> = z.object({
   maxRegexInputChars: z.natural().min(100).default(100000),
   code: z.object({
     timeoutMs: z.natural().min(1000).default(30000),
-    sandboxMode: z.string().default('read-only'),
+    sandboxMode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('read-only'),
   }),
   http: z.object({
     timeoutMs: z.natural().min(1000).default(30000),
     maxResponseBytes: z.natural().min(1024).default(2097152),
+    maxRedirects: z.natural().min(1).max(20).default(5),
     allowPrivateNetwork: z.boolean().default(false),
     allowedHosts: z.array(z.string()).default([]),
   }),

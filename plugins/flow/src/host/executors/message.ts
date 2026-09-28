@@ -7,15 +7,14 @@
 import type { FlowNode } from '../../spec/types.ts'
 import { renderTemplate } from '../../spec/template.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type MessageNode = Extract<FlowNode, { type: 'message' }>
 
 /** The message executor. */
 export const messageExecutor: NodeExecutor<MessageNode> = {
   type: 'message',
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
-    const values = resolveInputs(node, ctx.frame)
+  async execute(node, inputs, ctx): Promise<ExecResult> {
+    const values = inputs
     const rendered = renderTemplate(node.data.template, values)
     ctx.emitMessage(rendered.text)
     return { outputs: { text: rendered.text }, ...(rendered.warnings.length > 0 ? { warnings: rendered.warnings } : {}) }

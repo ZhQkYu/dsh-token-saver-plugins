@@ -8,11 +8,14 @@
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import type { FlowDocument, FlowNode, FrameStep, JsonValue, TokenUsageLite } from '../../spec/types.ts'
+import type { GenerateOptions, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { AnswerSpec, FlowDocument, FlowNode, FrameStep, JsonValue, TokenUsageLite } from '../../spec/types.ts'
 import type { Frame, NodeStatus } from '../engine/frames.ts'
 import type { RunBudget } from '../engine/budget.ts'
 import type { NodeError } from '../engine/budget.ts'
+import type { FlowLimits } from '../limits.ts'
 
 /** The narrow services an executor uses, injectable with fakes in tests. */
 export interface FlowServices {
@@ -20,7 +23,7 @@ export interface FlowServices {
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>
   }
   tools: {
-    execute(input: { callId: unknown; name: string; arguments: Record<string, JsonValue>; agent?: unknown; parent?: unknown; rootCallId?: unknown; signal: AbortSignal }): Promise<{ isError: boolean; value: JsonValue; content: { type: string; text?: string }[]; error?: { name: string } }>
+    execute(input: { callId: string; name: string; arguments: Record<string, JsonValue>; agent?: Agent; parent?: ToolExecutionToken; rootCallId?: ToolCallId; signal: AbortSignal }): Promise<{ isError: boolean; value: JsonValue; content: { type: string; text?: string }[]; error?: { message: string } }>
   }
   ptc?: {
     language: string
@@ -36,16 +39,18 @@ export interface FlowServices {
   defaultProvider?: string
   /** Max left-value chars for a `matches` regex, to bound ReDoS. Default 100000. */
   maxRegexInputChars?: number
+  /** Resolve the sandbox policy for a code node. */
+  sandboxPolicy: { resolve(request: { mode: SandboxMode }): SandboxExecutionPolicy }
 }
 
 /** The agent binding for a run: a caller (tool invocation) or a run session. */
 export type AgentBinding =
-  | { kind: 'caller'; agent: Agent; parent: unknown; rootCallId: unknown }
+  | { kind: 'caller'; agent: Agent; parent: ToolExecutionToken; rootCallId: ToolCallId }
   | { kind: 'run-session'; agent: Agent }
 
 /** The interaction seam for `question` nodes. */
 export interface Interaction {
-  ask(execKey: string, question: string, answerSpec: unknown, signal: AbortSignal): Promise<{ text?: string; optionId?: string }>
+  ask(execKey: string, question: string, answerSpec: AnswerSpec, signal: AbortSignal): Promise<{ text?: string; optionId?: string }>
 }
 
 /** The result of running a container scope (loop/batch). */
@@ -68,13 +73,19 @@ export interface ExecContext {
   frame: Frame
   workspacePath: string
   budget: RunBudget
+  limits: Readonly<FlowLimits>
   emitDelta(text: string): void
   emitMessage(text: string): void
   agent(): Promise<AgentBinding>
   interaction: Interaction
   services: FlowServices
-  runScope(container: FlowNode, inner: Record<string, JsonValue>): Promise<FrameResult>
-  runSubflow(flowId: string, version: number | 'published' | 'draft', inputs: Record<string, JsonValue>): Promise<Record<string, JsonValue>>
+  /** The chain of flow ids currently being executed, used to detect subflow recursion. */
+  flowStack: string[]
+  /** Run a container body once; `signal` defaults to this node's signal (batch passes its own to abort sibling items). */
+  runScope(container: FlowNode, inner: Record<string, JsonValue>, index: number, signal?: AbortSignal): Promise<FrameResult>
+  runSubflow(nodeId: string, flowId: string, version: number | 'published' | 'draft', inputs: Record<string, JsonValue>): Promise<Record<string, JsonValue>>
+  /** A monotonic run-scoped id for tool calls. */
+  nextCallId(): string
 }
 
 /** The result of executing one node. */
@@ -84,6 +95,8 @@ export interface ExecResult {
   usage?: TokenUsageLite
   logs?: string[]
   warnings?: string[]
+  /** The rendered model-facing text for an LLM node (system/prompt), after truncation. */
+  rendered?: { system?: string; prompt?: string }
 }
 
 /** An executor for one node type, keyed by its `type` discriminant. */

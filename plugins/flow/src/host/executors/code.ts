@@ -10,7 +10,6 @@ import type { FlowNode, JsonValue } from '../../spec/types.ts'
 import { coerce } from '../../spec/coerce.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type CodeNode = Extract<FlowNode, { type: 'code' }>
 
@@ -21,24 +20,39 @@ export const DEFAULT_CODE = 'async function main({ params }: { params: Record<st
 export const codeExecutor: NodeExecutor<CodeNode> = {
   type: 'code',
   requires: ['ptcRuntime'],
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
+  async execute(node, inputs, ctx): Promise<ExecResult> {
     const runtime = ctx.services.ptc
     if (runtime === undefined) throw new NodeError('SERVICE_UNAVAILABLE', 'code node requires the ptcRuntime service')
     if (runtime.language !== 'typescript') {
       throw new NodeError('CODE_RUNTIME', `unsupported runtime language ${runtime.language}`)
     }
-    const inputs = resolveInputs(node, ctx.frame)
     const program = `${node.data.code}\n;return await main({ params: await flow.params({}) })`
-    const spec = runtime.resolve({
-      program,
-      bindings: [{ global: 'flow', functions: { params: async () => inputs } }],
-      cwd: ctx.workspacePath,
-      timeoutMs: node.data.timeoutMs ?? 30_000,
-      signal: ctx.signal,
-    })
-    const result = await runtime.run(spec)
+    const policy = ctx.services.sandboxPolicy?.resolve({ mode: ctx.limits.code.sandboxMode }) ?? {}
+    let spec: unknown
+    try {
+      spec = runtime.resolve({
+        program,
+        bindings: [{ global: 'flow', functions: { params: async () => inputs } }],
+        cwd: ctx.workspacePath,
+        timeoutMs: Math.min(node.data.timeoutMs ?? ctx.limits.code.timeoutMs, ctx.limits.maxNodeTimeoutMs),
+        sandboxPolicy: { ...policy, workspaceRoot: ctx.workspacePath },
+        signal: ctx.signal,
+      })
+    } catch (error: unknown) {
+      throw new NodeError('CODE_RUNTIME', error instanceof Error ? error.message : String(error))
+    }
+    let result: { value?: JsonValue; logs: string[]; error?: { kind: string; message: string } }
+    try {
+      result = await runtime.run(spec)
+    } catch (error: unknown) {
+      throw new NodeError('CODE_RUNTIME', error instanceof Error ? error.message : String(error))
+    }
     if (result.error !== undefined) {
       const kind = result.error.kind.toUpperCase().replace(/-/g, '_')
+      if (result.error.kind === 'abort') {
+        // Aborted by the node signal: classify as cancellation at the scheduler.
+        throw new NodeError('CODE_ABORT', result.error.message, false)
+      }
       throw new NodeError(`CODE_${kind}`, result.error.message, result.error.kind === 'worker-exit')
     }
     if (result.value === undefined || result.value === null || typeof result.value !== 'object' || Array.isArray(result.value)) {

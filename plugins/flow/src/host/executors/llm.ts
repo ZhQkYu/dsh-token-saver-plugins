@@ -10,9 +10,9 @@ import { BlockAssembler, ReasoningEffortId, type GenerateOptions, type TokenUsag
 import type { FlowNode, JsonValue } from '../../spec/types.ts'
 import { renderTemplate } from '../../spec/template.ts'
 import { coerce } from '../../spec/coerce.ts'
+import { describeVarSchema } from '../../spec/var-schema.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 import { toUsageLite } from './index.ts'
 
 type LlmNode = Extract<FlowNode, { type: 'llm' }>
@@ -20,16 +20,19 @@ type LlmNode = Extract<FlowNode, { type: 'llm' }>
 /** The llm executor. */
 export const llmExecutor: NodeExecutor<LlmNode> = {
   type: 'llm',
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
-    const values = resolveInputs(node, ctx.frame)
+  async execute(node, inputs, ctx): Promise<ExecResult> {
+    const values = inputs
     const system = renderTemplate(node.data.system, values).text
-    let prompt = renderTemplate(node.data.prompt, values).text
+    const originalPrompt = renderTemplate(node.data.prompt, values).text
+    let prompt = originalPrompt
     const selection = node.data.model ?? ctx.services.defaultModel()
     const jsonFields = node.data.output.format === 'json' ? node.data.output.fields : undefined
 
     let attempts = 0
     let lastError: unknown
+    let totalUsage = toUsageLite(undefined)
     while (attempts < 2) {
+      ctx.budget.consumeLlmCall()
       const systemText = jsonFields === undefined ? system : `${system}\n\n${jsonInstruction(jsonFields)}`
       const options: GenerateOptions = {
         provider: selection.provider,
@@ -58,16 +61,17 @@ export const llmExecutor: NodeExecutor<LlmNode> = {
       const blocks = assembler.blocks()
       const text = blocks.filter(block => block.type === 'text').map(block => (block as { text: string }).text).join('')
       const reasoning = blocks.filter(block => block.type === 'reasoning').map(block => (block as { text: string }).text).join('') || null
-      ctx.budget.consumeLlmCall()
       const usageLite = toUsageLite(usage)
-      if (jsonFields === undefined) {
-        return { outputs: { text, reasoning }, ...(usage === undefined ? {} : { usage: usageLite }) }
+      totalUsage = addUsage(totalUsage, usageLite)
+      const jsonFieldsOut = jsonFields
+      if (jsonFieldsOut === undefined) {
+        return { outputs: { text, reasoning }, usage: totalUsage, rendered: { system: systemText, prompt } }
       }
       const parsed = tryParseJson(text)
       if (parsed !== undefined) {
-        const coerced = coerceFieldsToOutput(parsed, jsonFields)
+        const coerced = coerceFieldsToOutput(parsed, jsonFieldsOut)
         if (coerced !== undefined) {
-          return { outputs: coerced, ...(usage === undefined ? {} : { usage: usageLite }) }
+          return { outputs: coerced, usage: totalUsage, rendered: { system: systemText, prompt } }
         }
         lastError = new Error('parsed JSON does not match the output fields')
       } else {
@@ -75,15 +79,31 @@ export const llmExecutor: NodeExecutor<LlmNode> = {
       }
       attempts++
       if (attempts < 2) {
-        prompt = `${prompt}\n\nThe previous output could not be parsed. Respond with only a valid JSON object matching the declared fields.`
+        // One identity-free user turn carries the original request, the rejected reply, and the reason.
+        const reason = lastError instanceof Error ? lastError.message : 'invalid output'
+        prompt = `${originalPrompt}\n\n---\nYour previous reply could not be used (${reason}). Previous reply:\n${text.slice(0, REPAIR_ECHO_CHARS)}\n---\nRespond again with only a valid JSON object with exactly the declared fields.`
       }
     }
     throw new NodeError('LLM_BAD_JSON', lastError instanceof Error ? lastError.message : 'unable to produce JSON', true)
   },
 }
 
-function jsonInstruction(fields: { name: string }[]): string {
-  return `Respond with only a JSON object. Its fields must be exactly: ${fields.map(f => `"${f.name}"`).join(', ')}.`
+/** How much of a rejected reply the repair turn echoes back to the model. */
+const REPAIR_ECHO_CHARS = 4000
+
+function addUsage(a: import('../../spec/types.ts').TokenUsageLite, b: import('../../spec/types.ts').TokenUsageLite): import('../../spec/types.ts').TokenUsageLite {
+  const cacheRead = (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0)
+  const reasoning = (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0)
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    ...(cacheRead === 0 ? {} : { cacheReadTokens: cacheRead }),
+    ...(reasoning === 0 ? {} : { reasoningTokens: reasoning }),
+  }
+}
+
+function jsonInstruction(fields: { name: string; schema: import('../../spec/types.ts').VarSchema }[]): string {
+  return `Respond with only a JSON object. Its fields must be exactly: ${fields.map(f => `"${f.name}" (${describeVarSchema(f.schema)})`).join(', ')}.`
 }
 
 function tryParseJson(text: string): unknown {

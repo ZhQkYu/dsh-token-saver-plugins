@@ -8,16 +8,15 @@ import type { FlowNode } from '../../spec/types.ts'
 import { renderTemplate } from '../../spec/template.ts'
 import { resolveRef } from '../engine/frames.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type TextNode = Extract<FlowNode, { type: 'text' }>
 
 /** The text executor. */
 export const textExecutor: NodeExecutor<TextNode> = {
   type: 'text',
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
+  async execute(node, inputs, ctx): Promise<ExecResult> {
     if (node.data.op === 'concat') {
-      const values = resolveInputs(node, ctx.frame)
+      const values = inputs
       const rendered = renderTemplate(node.data.template, values)
       return { outputs: { text: rendered.text }, ...(rendered.warnings.length > 0 ? { warnings: rendered.warnings } : {}) }
     }

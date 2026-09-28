@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { FlowDocument, FlowNode, JsonValue, RunEvent } from '../src/spec/types.ts'
 import { compile } from '../src/host/engine/compile.ts'
-import { runRootFrame, type RunContext } from '../src/host/engine/scheduler.ts'
-import { Semaphore } from '../src/host/engine/scheduler.ts'
+import { runFlow, RunAbort, Semaphore, type RunContext } from '../src/host/engine/scheduler.ts'
 import { RunBudget } from '../src/host/engine/budget.ts'
 import { NodeError } from '../src/host/engine/budget.ts'
-import type { ExecContext, ExecResult, FlowServices, Interaction, NodeExecutor } from '../src/host/executors/index.ts'
+import type { ExecContext, FlowServices, Interaction, NodeExecutor } from '../src/host/executors/index.ts'
 import { conditionExecutor } from '../src/host/executors/condition.ts'
+import { buildExecutors } from '../src/host/executors/registry.ts'
 
 /** A controllable promise, used to assert concurrent execution. */
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -15,10 +15,32 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
+const testLimits = {
+  maxLoopIterations: 100,
+  maxBatchConcurrency: 10,
+  maxBatchItems: 100,
+  maxNodeTimeoutMs: 60000,
+  maxRetries: 5,
+  maxNestingDepth: 5,
+  maxRegexInputChars: 100000,
+  maxConcurrentNodes: 8,
+  maxNodeExecutionsPerRun: 100,
+  maxLlmCallsPerRun: 100,
+  maxAgentNodesPerRun: 100,
+  maxRunDurationMs: 60000,
+  code: { timeoutMs: 30000, sandboxMode: 'read-only' as const },
+  http: { timeoutMs: 30000, maxResponseBytes: 2000000, maxRedirects: 5, allowPrivateNetwork: false, allowedHosts: [] },
+  recordValueChars: 20000,
+  maxValueBytes: 4000000,
+  maxRunEventsBytes: 8000000,
+  keepRunsPerFlow: 50,
+  archiveRunSessions: true,
+}
+
 /** Build a minimal run context for scheduler tests. */
 function buildContext(opts: {
   doc: FlowDocument
-  executors: Record<string, NodeExecutor>
+  executors?: Record<string, NodeExecutor>
   services?: Partial<FlowServices>
   maxConcurrent?: number
   budget?: Partial<{ maxNodeExecutions: number; maxLlmCalls: number; maxAgentNodes: number; maxRunDurationMs: number }>
@@ -33,25 +55,16 @@ function buildContext(opts: {
     maxAgentNodes: opts.budget?.maxAgentNodes ?? 100,
     maxRunDurationMs: opts.budget?.maxRunDurationMs ?? 60000,
   })
-  const plan = compile(opts.doc, () => undefined, {
-    maxLoopIterations: 100,
-    maxBatchConcurrency: 10,
-    maxBatchItems: 100,
-    maxNodeTimeoutMs: 60000,
-    maxRetries: 5,
-    maxNestingDepth: 5,
-    maxRegexInputChars: 100000,
-  })
+  const plan = compile(opts.doc, () => undefined, testLimits)
+  const runController = new AbortController()
+  const runSignal = opts.signal === undefined ? runController.signal : AbortSignal.any([opts.signal, runController.signal])
   const services: FlowServices = {
     llm: { stream: async function* () {} },
     tools: { execute: async () => ({ isError: false, value: null, content: [] }) },
     defaultModel: () => ({ provider: 'test', model: 'test' }),
+    sandboxPolicy: { resolve: () => ({}) },
     ...opts.services,
   }
-  const endExecutor: NodeExecutor = {
-    type: 'end',
-    execute: async (_node, inputs) => ({ outputs: { ...inputs } }),
-  } as never
   const ctx: RunContext = {
     runId: 'run-1',
     workspacePath: '/tmp',
@@ -61,11 +74,14 @@ function buildContext(opts: {
     interaction,
     agent: async () => ({ kind: 'run-session', agent: {} as never }),
     emitter,
-    executors: { ...opts.executors, end: endExecutor },
+    executors: { ...buildExecutors(), ...(opts.executors ?? {}) },
     plan,
-    signal: opts.signal ?? new AbortController().signal,
+    limits: testLimits,
+    signal: runSignal,
+    abortRun: (reason) => { runController.abort(reason) },
     runSubflow: async () => ({}),
     runContainer: async () => ({ nodeOutputs: new Map(), failed: false }),
+    nextCallId: () => 'call-1',
   }
   return { ctx, events }
 }
@@ -100,13 +116,10 @@ describe('scheduler', () => {
       { id: 'e1', source: 'start', sourceHandle: 'next', target: 'text1' },
       { id: 'e2', source: 'text1', sourceHandle: 'next', target: 'end' },
     ]
-    const { ctx, events } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: simpleExecutor(i => ({ text: String(i.t ?? '') })) } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'hello' }, ctx)
+    const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: simpleExecutor(i => ({ text: String(i.t ?? '') })) } })
+    const result = await runFlow(ctx.plan, { x: 'hello' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: 'hello' })
-    const finished = events.filter(e => e.type === 'run.finished')
-    expect(finished.length).toBe(1)
-    expect(finished[0]?.type === 'run.finished' && finished[0].status).toBe('succeeded')
   })
 
   it('executes ready nodes in parallel, bounded by the semaphore', async () => {
@@ -132,13 +145,46 @@ describe('scheduler', () => {
       { id: 'e3', source: 'a', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: blockingExecutor } })
-    const run = runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const run = runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     await new Promise(r => setTimeout(r, 10))
     // Both a and b should have started concurrently.
     expect(started.sort()).toEqual(['a', 'b'])
     gate.resolve()
     const result = await run
     expect(result.status).toBe('succeeded')
+  })
+
+  it('bounded by the semaphore when maxConcurrentNodes is 1', async () => {
+    const gate = deferred()
+    let concurrent = 0
+    let peak = 0
+    const blockingExecutor: NodeExecutor = {
+      type: 'text',
+      execute: async () => {
+        concurrent++
+        peak = Math.max(peak, concurrent)
+        await gate.promise
+        concurrent--
+        return { outputs: { text: 'ok' } }
+      },
+    } as never
+    const nodes = [
+      node({ id: 'start', type: 'start', title: 'Start', data: { fields: [{ name: 'x', schema: { type: 'string' } }] } }),
+      node({ id: 'a', type: 'text', title: 'A', data: { op: 'concat', inputs: [{ name: 't', schema: { type: 'string' }, value: { kind: 'ref', node: 'start', source: 'output', path: ['x'] } }], template: '{{t}}' } }),
+      node({ id: 'b', type: 'text', title: 'B', data: { op: 'concat', inputs: [{ name: 't', schema: { type: 'string' }, value: { kind: 'ref', node: 'start', source: 'output', path: ['x'] } }], template: '{{t}}' } }),
+      node({ id: 'end', type: 'end', title: 'End', data: { mode: 'variables', inputs: [{ name: 'out', schema: { type: 'string' }, value: { kind: 'ref', node: 'a', source: 'output', path: ['text'] } }] } }),
+    ]
+    const edges = [
+      { id: 'e1', source: 'start', sourceHandle: 'next', target: 'a' },
+      { id: 'e2', source: 'start', sourceHandle: 'next', target: 'b' },
+      { id: 'e3', source: 'a', sourceHandle: 'next', target: 'end' },
+    ]
+    const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: blockingExecutor }, maxConcurrent: 1 })
+    const run = runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
+    await new Promise(r => setTimeout(r, 10))
+    gate.resolve()
+    await run
+    expect(peak).toBe(1)
   })
 
   it('skips the unselected branch and propagates the skip', async () => {
@@ -150,7 +196,6 @@ describe('scheduler', () => {
         return { outputs: { text: node.id } }
       },
     } as never
-    // condition node: choose branch 'ok', else skipped.
     const nodes = [
       node({ id: 'start', type: 'start', title: 'Start', data: { fields: [{ name: 'x', schema: { type: 'string' } }] } }),
       node({
@@ -169,7 +214,7 @@ describe('scheduler', () => {
       { id: 'e4', source: 'yes', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx, events } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: recordExecutor, condition: conditionExecutor } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'yes' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'yes' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(executed).toContain('yes')
     expect(executed).not.toContain('no')
@@ -192,7 +237,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: failing } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: 'fallback' })
   })
@@ -212,7 +257,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'error', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: failing } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: 'boom' })
   })
@@ -231,12 +276,10 @@ describe('scheduler', () => {
       { id: 'e1', source: 'start', sourceHandle: 'next', target: 't' },
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
-    const { ctx, events } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: failing } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: failing } })
+    const result = await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
     expect(result.error?.code).toBe('NODE_ERROR')
-    const finished = events.find(e => e.type === 'run.finished')
-    expect(finished?.type === 'run.finished' && finished.status).toBe('failed')
   })
 
   it('retries retryable errors up to the configured count', async () => {
@@ -259,7 +302,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: flaky } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(attempts).toBe(3)
   })
@@ -283,7 +326,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: failing } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
     expect(attempts).toBe(1)
   })
@@ -304,7 +347,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 'cond', sourceHandle: 'else', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { condition: conditionExecutor } })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'yes' }, ctx)
+    const result = await runFlow(ctx.plan, { x: 'yes' }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
     expect(result.error?.code).toBe('END_NOT_REACHED')
   })
@@ -330,12 +373,12 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: slow }, signal: controller.signal })
-    const run = runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    const run = runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     await new Promise(r => setTimeout(r, 10))
-    controller.abort()
+    controller.abort(new RunAbort('user'))
     gate.resolve()
     const result = await run
-    expect(result.status).toBe('failed')
+    expect(result.status).toBe('cancelled')
   })
 
   it('emits monotonically increasing seq values', async () => {
@@ -349,7 +392,7 @@ describe('scheduler', () => {
       { id: 'e2', source: 't', sourceHandle: 'next', target: 'end' },
     ]
     const { ctx, events } = buildContext({ doc: makeDoc(nodes, edges), executors: { text: simpleExecutor(i => ({ text: String(i.t ?? '') })) } })
-    await runRootFrame(ctx.plan, ctx.plan.doc, { x: 'v' }, ctx)
+    await runFlow(ctx.plan, { x: 'v' }, ctx, [], ['flow-1'])
     for (let i = 1; i < events.length; i++) {
       expect(events[i]!.seq).toBeGreaterThan(events[i - 1]!.seq)
     }

@@ -6,6 +6,7 @@
  */
 
 import type { FrameStep, JsonValue, ValueSource } from '../../spec/types.ts'
+import type { ExecutionPlan } from './compile.ts'
 
 /** The lifecycle state of a node within a frame. */
 export type NodeStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled'
@@ -15,6 +16,10 @@ export interface Frame {
   scope: string
   parent?: Frame
   path: FrameStep[]
+  /** The plan this frame runs under, so containers resolve their own scope. */
+  plan: ExecutionPlan
+  /** The abort signal for this frame, inheriting the parent's and aborting siblings on failure. */
+  signal: AbortSignal
   /** node id -> output values. */
   outputs: Map<string, Record<string, JsonValue>>
   /** node id -> status. */
@@ -27,6 +32,8 @@ export interface Frame {
   control?: 'break' | 'continue'
   /** The first fatal error that failed this frame (onError=fail), propagated upward. */
   error?: { code: string; message: string; nodeId?: string }
+  /** The frame's own abort controller, used to cancel siblings on failure. */
+  controller: AbortController
 }
 
 /** Resolve a reference against a frame chain. */
@@ -83,9 +90,27 @@ export function resolveRefFromOutputs(nodeOutputs: Map<string, Record<string, Js
   return traversePath(outputs, ref.path)
 }
 
-/** Build a frame for a scope with its path. */
-export function createFrame(scope: string, path: FrameStep[], parent?: Frame, inner?: Record<string, JsonValue>): Frame {
-  return { scope, path, parent, outputs: new Map(), status: new Map(), firedPorts: new Map(), ...(inner === undefined ? {} : { inner }) }
+/**
+ * Build a frame for a scope with its path. `baseSignal` (the owning node's
+ * signal) takes precedence over the parent frame's, so a container or subflow
+ * node timing out or being cancelled aborts its body.
+ */
+export function createFrame(scope: string, path: FrameStep[], plan: ExecutionPlan, parent?: Frame, baseSignal?: AbortSignal, inner?: Record<string, JsonValue>): Frame {
+  const controller = new AbortController()
+  const upstream = baseSignal ?? parent?.signal
+  const signal = upstream === undefined ? controller.signal : AbortSignal.any([upstream, controller.signal])
+  return {
+    scope,
+    path,
+    plan,
+    signal,
+    controller,
+    parent,
+    outputs: new Map(),
+    status: new Map(),
+    firedPorts: new Map(),
+    ...(inner === undefined ? {} : { inner }),
+  }
 }
 
 /** The execution key for a node within a frame. */

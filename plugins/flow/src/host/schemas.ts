@@ -8,7 +8,7 @@
 
 import { z } from 'zod'
 import type { VarField, VarSchema } from '../spec/types.ts'
-import { CONDITION_OPS, ID_PATTERN, NAME_PATTERN } from '../spec/types.ts'
+import { CONDITION_OPS, FLOW_TOOL_NAME_PATTERN, ID_PATTERN, NAME_PATTERN } from '../spec/types.ts'
 
 /** Maximum nodes in one flow. */
 export const MAX_NODES = 500
@@ -167,6 +167,8 @@ export const runSummarySchema = z.strictObject({
   finishedAt: z.number().int().nonnegative().optional(),
   usage: z.strictObject({ inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), cacheReadTokens: z.number().int().nonnegative().optional(), reasoningTokens: z.number().int().nonnegative().optional() }),
   nodeExecutions: z.number().int().nonnegative(),
+  workspacePath: z.string().max(5000).optional(),
+  eventsTruncated: z.boolean().optional(),
 })
 
 /** Route body schemas. */
@@ -174,11 +176,11 @@ export const createFlowSchema = z.strictObject({ name: z.string().min(1).max(200
 export const saveFlowSchema = z.strictObject({ flow: flowDocumentSchema, baseRevision: z.number().int().nonnegative() })
 export const idRequestSchema = z.strictObject({ id })
 export const duplicateFlowSchema = z.strictObject({ id })
-export const publishFlowSchema = z.strictObject({ id, baseRevision: z.number().int().nonnegative(), note: z.string().max(2000).optional(), tool: z.strictObject({ enabled: z.boolean(), name: z.string().max(128), description: z.string().max(2000) }).optional() })
-export const runStartSchema = z.strictObject({ flowId: id, version: z.union([z.number().int().positive(), z.literal('draft')]), inputs: z.json(), workspaceId: z.string().optional() })
+export const publishFlowSchema = z.strictObject({ id, baseRevision: z.number().int().nonnegative(), note: z.string().max(2000).optional(), tool: z.strictObject({ enabled: z.boolean(), name: z.string().regex(FLOW_TOOL_NAME_PATTERN), description: z.string().max(2000).optional() }).optional() })
+export const runStartSchema = z.strictObject({ flowId: id, version: z.union([z.number().int().positive(), z.literal('draft')]), inputs: z.json(), workspaceId: z.string().min(1) })
 export const runCancelSchema = z.strictObject({ runId: id })
 export const runAnswerSchema = z.strictObject({ runId: id, execKey: z.string().max(1000), answer: z.strictObject({ text: z.string().max(20000).optional(), optionId: z.string().max(128).optional() }) })
-export const nodeDebugSchema = z.strictObject({ flow: flowDocumentSchema, nodeId: id, inputs: z.json(), workspaceId: z.string().optional() })
+export const nodeDebugSchema = z.strictObject({ flow: flowDocumentSchema, nodeId: id, inputs: z.json(), workspaceId: z.string().min(1) })
 
 /** A validator for a {@link FlowDocument}, used by the store. */
 export interface FlowDocumentValidator {

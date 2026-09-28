@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { FlowDocument, FlowNode, JsonValue } from '../src/spec/types.ts'
 import { compile } from '../src/host/engine/compile.ts'
-import { runContainerFrame, runRootFrame, Semaphore, type RunContext } from '../src/host/engine/scheduler.ts'
+import { runFlow, runContainerFrame, Semaphore, type RunContext } from '../src/host/engine/scheduler.ts'
 import { RunBudget } from '../src/host/engine/budget.ts'
-import { NodeError } from '../src/host/engine/budget.ts'
 import type { FlowServices, Interaction, NodeExecutor } from '../src/host/executors/index.ts'
+import { buildExecutors } from '../src/host/executors/registry.ts'
 import { loopExecutor } from '../src/host/executors/loop.ts'
 import { batchExecutor } from '../src/host/executors/batch.ts'
 import { textExecutor } from '../src/host/executors/text.ts'
@@ -18,19 +18,42 @@ function makeDoc(nodes: FlowNode[], edges: FlowDocument['edges']): FlowDocument 
   return { schemaVersion: 1, id: 'flow-1', name: 'test', description: '', nodes, edges, revision: 1, updatedAt: 0 }
 }
 
+const testLimits = {
+  maxLoopIterations: 10,
+  maxBatchConcurrency: 10,
+  maxBatchItems: 10,
+  maxNodeTimeoutMs: 60000,
+  maxRetries: 5,
+  maxNestingDepth: 5,
+  maxRegexInputChars: 100000,
+  maxConcurrentNodes: 8,
+  maxNodeExecutionsPerRun: 100,
+  maxLlmCallsPerRun: 100,
+  maxAgentNodesPerRun: 100,
+  maxRunDurationMs: 60000,
+  code: { timeoutMs: 30000, sandboxMode: 'read-only' as const },
+  http: { timeoutMs: 30000, maxResponseBytes: 2000000, maxRedirects: 5, allowPrivateNetwork: false, allowedHosts: [] },
+  recordValueChars: 20000,
+  maxValueBytes: 4000000,
+  maxRunEventsBytes: 8000000,
+  keepRunsPerFlow: 50,
+  archiveRunSessions: true,
+}
+
 function buildContext(doc: FlowDocument, extraExecutors: Record<string, NodeExecutor>): { ctx: RunContext; events: import('../src/spec/types.ts').RunEvent[] } {
   const events: import('../src/spec/types.ts').RunEvent[] = []
   const emitter = { seq: 0, emit: (event: import('../src/spec/types.ts').RunEvent) => { events.push(event) } }
   const interaction: Interaction = { ask: async () => ({}) }
   const budget = new RunBudget({ maxNodeExecutions: 100, maxLlmCalls: 100, maxAgentNodes: 100, maxRunDurationMs: 60000 })
-  const plan = compile(doc, () => undefined, { maxLoopIterations: 10, maxBatchConcurrency: 10, maxBatchItems: 10, maxNodeTimeoutMs: 60000, maxRetries: 5, maxNestingDepth: 5, maxRegexInputChars: 100000 })
+  const plan = compile(doc, () => undefined, testLimits)
   const services: FlowServices = {
     llm: { stream: async function* () {} },
     tools: { execute: async () => ({ isError: false, value: null, content: [] }) },
     defaultModel: () => ({ provider: 'test', model: 'test' }),
+    sandboxPolicy: { resolve: () => ({}) },
   }
-  const endExecutor: NodeExecutor = { type: 'end', execute: async (_n, inputs) => ({ outputs: { ...inputs } }) } as never
   let ctxRef!: RunContext
+  const runController = new AbortController()
   const ctx: RunContext = {
     runId: 'run-1',
     workspacePath: '/tmp',
@@ -40,11 +63,14 @@ function buildContext(doc: FlowDocument, extraExecutors: Record<string, NodeExec
     interaction,
     agent: async () => ({ kind: 'run-session', agent: {} as never }),
     emitter,
-    executors: { ...extraExecutors, end: endExecutor },
+    executors: { ...buildExecutors(), ...extraExecutors },
     plan,
-    signal: new AbortController().signal,
+    limits: testLimits,
+    signal: runController.signal,
+    abortRun: (reason) => { runController.abort(reason) },
     runSubflow: async () => ({}),
-    runContainer: (containerId, inner, path, parentFrame) => runContainerFrame(plan, containerId, inner, path, parentFrame, ctxRef),
+    runContainer: (containerId, inner, index, parentFrame, flowStack, signal) => runContainerFrame(parentFrame.plan, containerId, inner, [...parentFrame.path, { node: containerId, index }], parentFrame, ctxRef, flowStack, signal),
+    nextCallId: () => 'call-1',
   }
   ctxRef = ctx
   return { ctx, events }
@@ -64,7 +90,7 @@ describe('loop executor', () => {
       { id: 'e3', source: 'loop1', sourceHandle: 'body', target: 'text1' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { loop: loopExecutor, text: textExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'b', 'c'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['a', 'b', 'c'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: ['a', 'b', 'c'] })
   })
@@ -83,12 +109,12 @@ describe('loop executor', () => {
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { loop: loopExecutor, text: textExecutor })
     // n=5 but maxIterations=3 -> only 3 rounds.
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { n: 5 }, ctx)
+    const result = await runFlow(ctx.plan, { n: 5 }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: ['0', '1', '2'] })
   })
 
-  it('throws LOOP_LIMIT when an array exceeds maxIterations', async () => {
+  it('fails with LOOP_LIMIT when an array exceeds maxIterations', async () => {
     const nodes: FlowNode[] = [
       node({ id: 'start', type: 'start', title: 'Start', data: { fields: [{ name: 'arr', schema: { type: 'array', items: { type: 'string' } } }] } }),
       node({ id: 'loop1', type: 'loop', title: 'Loop', data: { mode: 'array', array: { kind: 'ref', node: 'start', source: 'output', path: ['arr'] }, maxIterations: 2, variables: [], outputs: [] } }),
@@ -101,7 +127,7 @@ describe('loop executor', () => {
       { id: 'e3', source: 'loop1', sourceHandle: 'body', target: 'text1' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { loop: loopExecutor, text: textExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'b', 'c'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['a', 'b', 'c'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
     expect(result.error?.code).toBe('LOOP_LIMIT')
   })
@@ -121,7 +147,7 @@ describe('loop executor', () => {
       { id: 'e4', source: 'text1', sourceHandle: 'next', target: 'brk' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { loop: loopExecutor, text: textExecutor, break: breakExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'b', 'c'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['a', 'b', 'c'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     // First round completes, then break fires before round 2.
     expect(result.outputs).toEqual({ out: ['a'] })
@@ -140,7 +166,7 @@ describe('loop executor', () => {
       { id: 'e3', source: 'loop1', sourceHandle: 'body', target: 'asg' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { loop: loopExecutor, assign: assignExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['x', 'y', 'z'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['x', 'y', 'z'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: 'z' })
   })
@@ -160,7 +186,7 @@ describe('batch executor', () => {
       { id: 'e3', source: 'batch1', sourceHandle: 'body', target: 'text1' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { batch: batchExecutor, text: textExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'b', 'c', 'd'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['a', 'b', 'c', 'd'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('succeeded')
     expect(result.outputs).toEqual({ out: ['a', 'b', 'c', 'd'] })
   })
@@ -178,7 +204,7 @@ describe('batch executor', () => {
       { id: 'e3', source: 'batch1', sourceHandle: 'body', target: 'text1' },
     ]
     const { ctx } = buildContext(makeDoc(nodes, edges), { batch: batchExecutor, text: textExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'b', 'c'] }, ctx)
+    const result = await runFlow(ctx.plan, { arr: ['a', 'b', 'c'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
     expect(result.error?.code).toBe('LOOP_LIMIT')
   })
@@ -195,10 +221,14 @@ describe('batch executor', () => {
       { id: 'e2', source: 'batch1', sourceHandle: 'next', target: 'end' },
       { id: 'e3', source: 'batch1', sourceHandle: 'body', target: 'cond' },
     ]
-    // No condition executor -> the node fails, failing the batch.
-    const { ctx } = buildContext(makeDoc(nodes, edges), { batch: batchExecutor })
-    const result = await runRootFrame(ctx.plan, ctx.plan.doc, { arr: ['a', 'bad', 'c'] }, ctx)
+    // A failing body node fails the batch and aborts the remaining items.
+    const failingCondition: NodeExecutor = {
+      type: 'condition',
+      execute: async () => { throw new Error('boom') },
+    } as never
+    const { ctx } = buildContext(makeDoc(nodes, edges), { batch: batchExecutor, condition: failingCondition })
+    const result = await runFlow(ctx.plan, { arr: ['a', 'bad', 'c'] }, ctx, [], ['flow-1'])
     expect(result.status).toBe('failed')
-    expect(result.error?.code).toBe('BATCH_ITEM_FAILED')
+    expect(result.error?.code).toBe('NODE_ERROR')
   })
 })

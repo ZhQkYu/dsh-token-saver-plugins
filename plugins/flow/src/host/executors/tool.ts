@@ -8,7 +8,6 @@
 import type { FlowNode } from '../../spec/types.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type ToolNode = Extract<FlowNode, { type: 'tool' }>
 
@@ -16,11 +15,11 @@ type ToolNode = Extract<FlowNode, { type: 'tool' }>
 export const toolExecutor: NodeExecutor<ToolNode> = {
   type: 'tool',
   requires: ['agent'],
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
-    const args = resolveInputs(node, ctx.frame)
+  async execute(node, inputs, ctx): Promise<ExecResult> {
+    const args = inputs
     const binding = await ctx.agent()
     const result = await ctx.services.tools.execute({
-      callId: `flow-${ctx.runId}-${ctx.execKey}`,
+      callId: ctx.nextCallId(),
       name: node.data.tool,
       arguments: args,
       agent: binding.agent,
@@ -29,7 +28,7 @@ export const toolExecutor: NodeExecutor<ToolNode> = {
     })
     const text = result.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n')
     if (result.isError) {
-      throw new NodeError('TOOL_ERROR', text || result.error?.name || 'tool failed')
+      throw new NodeError('TOOL_ERROR', text || result.error?.message || 'tool failed')
     }
     return { outputs: { text, value: result.value } }
   },

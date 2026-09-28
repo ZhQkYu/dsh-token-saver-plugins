@@ -53,7 +53,7 @@ function makeTools(meta: { publishedVersion: number; tool?: { enabled: boolean; 
   const store = new FakeFlowStore(makeFlow(), meta)
   const engine = new FakeEngine() as unknown as FlowEngine
   const fakeTools = new FakeTools()
-  const ctx = { tools: fakeTools } as never
+  const ctx = { tools: fakeTools, logger: { warn: () => {}, debug: () => {} } } as never
   return { tools: new FlowTools(ctx, store as unknown as FlowStore, engine), fakeTools }
 }
 

@@ -13,11 +13,19 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { FlowDocument, VarField } from '../../spec/types.ts'
 import { ROUTES } from '../../spec/types.ts'
+import type { ValidateLimits } from '../../spec/validate.ts'
 import { json, errorResponse } from '../http.ts'
 import type { FlowStore } from '../store/flow-store.ts'
 
 /** Register the catalog routes. */
-export function registerCatalogRoutes(ctx: Context, store: FlowStore): void {
+export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix: string, limits: ValidateLimits): void {
+  ctx.connection.fetch.register({
+    path: ROUTES.catalogLimits,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: () => Promise.resolve(json({ limits })),
+  })
+
   ctx.connection.fetch.register({
     path: ROUTES.catalogModels,
     methods: ['GET'],
@@ -38,7 +46,7 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore): void {
     fetch: async () => {
       try {
         const tools = ctx.tools.schemas()
-        const visible = tools.filter(tool => tool.name !== 'run_code' && !tool.name.startsWith('flow_'))
+        const visible = tools.filter(tool => tool.name !== 'run_code' && !tool.name.startsWith(toolPrefix))
         return json({ tools: visible.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) })
       } catch (error: unknown) {
         return errorResponse(error, 500)
@@ -55,8 +63,8 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore): void {
         const draft = store.get(summary.id)
         const published = summary.publishedVersion === undefined ? undefined : store.version(summary.id, summary.publishedVersion)
         const io = (doc: ReturnType<FlowStore['get']> | undefined) => doc === undefined
-          ? { inputs: [], outputs: [] }
-          : { inputs: startInputs(doc), outputs: endOutputs(doc) }
+          ? { inputs: [], outputs: [], subflows: [] }
+          : { inputs: startInputs(doc), outputs: endOutputs(doc), subflows: subflowRefs(doc) }
         return {
           id: summary.id,
           name: summary.name,
@@ -112,4 +120,8 @@ function endOutputs(doc: FlowDocument): VarField[] {
     return end.data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
   }
   return []
+}
+
+function subflowRefs(doc: FlowDocument): { flowId: string; version: 'published' | 'draft' }[] {
+  return doc.nodes.flatMap(node => node.type === 'subflow' && node.data.flowId !== '' ? [{ flowId: node.data.flowId, version: node.data.version }] : [])
 }

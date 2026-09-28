@@ -9,8 +9,30 @@ import { codeExecutor } from '../src/host/executors/code.ts'
 import { agentExecutor } from '../src/host/executors/agent.ts'
 import { subflowExecutor } from '../src/host/executors/subflow.ts'
 
+const testLimits = {
+  maxLoopIterations: 10,
+  maxBatchConcurrency: 10,
+  maxBatchItems: 10,
+  maxNodeTimeoutMs: 60000,
+  maxRetries: 5,
+  maxNestingDepth: 5,
+  maxRegexInputChars: 100000,
+  maxConcurrentNodes: 8,
+  maxNodeExecutionsPerRun: 100,
+  maxLlmCallsPerRun: 100,
+  maxAgentNodesPerRun: 100,
+  maxRunDurationMs: 60000,
+  code: { timeoutMs: 30000, sandboxMode: 'read-only' as const },
+  http: { timeoutMs: 30000, maxResponseBytes: 2000000, maxRedirects: 5, allowPrivateNetwork: false, allowedHosts: [] },
+  recordValueChars: 20000,
+  maxValueBytes: 4000000,
+  maxRunEventsBytes: 8000000,
+  keepRunsPerFlow: 50,
+  archiveRunSessions: true,
+}
+
 function makeCtx(services: FlowServices, overrides: Partial<ExecContext> = {}): ExecContext {
-  const frame = createFrame('root', [], undefined)
+  const frame = createFrame('root', [], { doc: { nodes: [] }, scopes: new Map() } as never, undefined, new AbortController().signal)
   return {
     signal: new AbortController().signal,
     runId: 'run-1',
@@ -18,13 +40,16 @@ function makeCtx(services: FlowServices, overrides: Partial<ExecContext> = {}): 
     frame,
     workspacePath: '/tmp',
     budget: new RunBudget({ maxNodeExecutions: 100, maxLlmCalls: 100, maxAgentNodes: 100, maxRunDurationMs: 60000 }),
+    limits: testLimits,
     emitDelta: () => {},
     emitMessage: () => {},
     agent: async () => ({ kind: 'run-session', agent: {} as never }),
     interaction: { ask: async () => ({}) },
     services,
+    flowStack: [],
     runScope: async () => ({ nodeOutputs: new Map(), failed: false }),
     runSubflow: async () => ({}),
+    nextCallId: () => 'call-1',
     ...overrides,
   }
 }
@@ -117,7 +142,7 @@ describe('tool executor', () => {
   it('throws TOOL_ERROR when the tool reports an error', async () => {
     const ctx = makeCtx({
       llm: { stream: async function* () {} },
-      tools: { execute: async () => ({ isError: true, value: null, content: [{ type: 'text', text: 'failed' }], error: { name: 'boom' } }) },
+      tools: { execute: async () => ({ isError: true, value: null, content: [{ type: 'text', text: 'failed' }], error: { message: 'boom' } }) },
       defaultModel: () => ({ provider: 'p', model: 'm' }),
     })
     const node = {
@@ -244,7 +269,7 @@ describe('agent executor', () => {
 
 describe('subflow executor', () => {
   it('delegates to runSubflow and returns its outputs', async () => {
-    const runSubflow = vi.fn(async (_flowId: string, _version: string, _inputs: Record<string, unknown>) => ({ result: 'nested' }))
+    const runSubflow = vi.fn(async (_nodeId: string, _flowId: string, _version: string, _inputs: Record<string, unknown>) => ({ result: 'nested' }))
     const ctx = makeCtx({
       llm: { stream: async function* () {} },
       tools: { execute: async () => ({ isError: false, value: null, content: [] }) },
@@ -254,8 +279,8 @@ describe('subflow executor', () => {
       id: 'sub1', type: 'subflow', title: 'Sub', description: '', position: { x: 0, y: 0 },
       data: { flowId: 'flow-2', version: 'published', inputs: [{ name: 'topic', schema: { type: 'string' }, value: { kind: 'literal', value: 'hello' } }] },
     } as Extract<FlowNode, { type: 'subflow' }>
-    const result = await subflowExecutor.execute(node, {}, ctx)
-    expect(runSubflow).toHaveBeenCalledWith('flow-2', 'published', { topic: 'hello' })
+    const result = await subflowExecutor.execute(node, { topic: 'hello' }, ctx)
+    expect(runSubflow).toHaveBeenCalledWith('sub1', 'flow-2', 'published', { topic: 'hello' })
     expect(result.outputs).toEqual({ result: 'nested' })
   })
 })

@@ -6,6 +6,7 @@
 
 import type { FlowNode } from '../../spec/types.ts'
 import { resolveRef } from '../engine/frames.ts'
+import { coerce } from '../../spec/coerce.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
 
 type AggregateNode = Extract<FlowNode, { type: 'aggregate' }>
@@ -19,10 +20,11 @@ export const aggregateExecutor: NodeExecutor<AggregateNode> = {
       let value: unknown = null
       for (const candidate of group.candidates) {
         const resolved = resolveRef(ctx.frame, candidate)
-        if (resolved !== null && resolved !== undefined) {
-          value = resolved
-          break
-        }
+        if (resolved === null || resolved === undefined) continue
+        // Coerce the candidate to the group schema; an uncoercible candidate is
+        // treated as empty and the next candidate is tried.
+        const coerced = coerce(resolved, group.schema)
+        if (coerced.ok) { value = coerced.value; break }
       }
       outputs[group.name] = value
     }

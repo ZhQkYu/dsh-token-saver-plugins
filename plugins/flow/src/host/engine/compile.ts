@@ -7,6 +7,7 @@
 
 import type { FlowDocument, FlowEdge, FlowLookup, FlowNode, Issue } from '../../spec/types.ts'
 import { validateFlow, type ValidateLimits } from '../../spec/validate.ts'
+import { NODE_SPECS } from '../../spec/nodes/index.ts'
 
 /** Thrown when a flow has error-level validation issues at compile time. */
 export class FlowValidationError extends Error {
@@ -26,6 +27,8 @@ export interface ScopePlan {
   outEdges: Map<string, FlowEdge[]>
   /** Entry node ids: `start` for root, body targets for a container. */
   entry: string[]
+  /** Deterministic topological order of node ids in this scope. */
+  order: string[]
 }
 
 /** A compiled flow. */
@@ -46,7 +49,9 @@ export function compile(doc: FlowDocument, lookup: FlowLookup, limits: ValidateL
     if (node.type === 'loop' || node.type === 'batch') scopeIds.add(node.id)
   }
   for (const scope of scopeIds) {
-    const nodes = doc.nodes.filter(node => (node.parentId ?? 'root') === scope)
+    // Non-executable nodes (e.g. `comment`) are annotations, not execution
+    // units: drop them from the plan so they are never scheduled or skipped.
+    const nodes = doc.nodes.filter(node => (node.parentId ?? 'root') === scope && NODE_SPECS[node.type].executable)
     const inEdges = new Map<string, FlowEdge[]>()
     const outEdges = new Map<string, FlowEdge[]>()
     const nodeIds = new Set(nodes.map(node => node.id))
@@ -65,7 +70,27 @@ export function compile(doc: FlowDocument, lookup: FlowLookup, limits: ValidateL
     } else {
       entry = doc.edges.filter(edge => edge.source === scope && edge.sourceHandle === 'body').map(edge => edge.target)
     }
-    scopes.set(scope, { scope, nodes, inEdges, outEdges, entry })
+    scopes.set(scope, { scope, nodes, inEdges, outEdges, entry, order: topoOrder(nodes, inEdges, outEdges, entry) })
   }
   return { doc, scopes }
+}
+
+/** Compute a deterministic topological order for a scope's nodes. */
+function topoOrder(nodes: FlowNode[], inEdges: Map<string, FlowEdge[]>, outEdges: Map<string, FlowEdge[]>, entry: string[]): string[] {
+  const indegree = new Map<string, number>()
+  for (const node of nodes) indegree.set(node.id, (inEdges.get(node.id) ?? []).length)
+  const queue = [...entry].filter(id => indegree.get(id) === 0)
+  const ordered: string[] = []
+  while (queue.length > 0) {
+    // Deterministic: pick the smallest id among currently zero-indegree nodes.
+    queue.sort((a, b) => a.localeCompare(b))
+    const current = queue.shift() as string
+    ordered.push(current)
+    for (const edge of outEdges.get(current) ?? []) {
+      const next = (indegree.get(edge.target) ?? 1) - 1
+      indegree.set(edge.target, next)
+      if (next === 0) queue.push(edge.target)
+    }
+  }
+  return ordered
 }

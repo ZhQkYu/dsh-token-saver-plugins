@@ -13,6 +13,7 @@ import { batchExecutor } from './batch.ts'
 import { codeExecutor } from './code.ts'
 import { conditionExecutor } from './condition.ts'
 import { assignExecutor, breakExecutor, continueExecutor } from './control.ts'
+import { endExecutor } from './end.ts'
 import { httpExecutor } from './http.ts'
 import { intentExecutor } from './intent.ts'
 import { jsonExecutor } from './json.ts'
@@ -26,6 +27,7 @@ import { toolExecutor } from './tool.ts'
 
 /** The executor registry, keyed by node type. */
 export const EXECUTORS: Record<string, NodeExecutor> = {
+  end: endExecutor,
   llm: llmExecutor,
   intent: intentExecutor,
   agent: agentExecutor,

@@ -7,16 +7,14 @@
 
 import type { FlowNode } from '../../spec/types.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type SubflowNode = Extract<FlowNode, { type: 'subflow' }>
 
 /** The subflow executor. */
 export const subflowExecutor: NodeExecutor<SubflowNode> = {
   type: 'subflow',
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
-    const inputs = resolveInputs(node, ctx.frame)
-    const outputs = await ctx.runSubflow(node.data.flowId, node.data.version, inputs)
+  async execute(node, inputs, ctx): Promise<ExecResult> {
+    const outputs = await ctx.runSubflow(node.id, node.data.flowId, node.data.version, inputs)
     return { outputs }
   },
 }

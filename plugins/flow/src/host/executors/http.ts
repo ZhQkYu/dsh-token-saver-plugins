@@ -10,7 +10,7 @@ import type { FlowNode } from '../../spec/types.ts'
 import { renderTemplate } from '../../spec/template.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
+import { BlockedUrlError } from '../services/guarded-fetch.ts'
 
 type HttpNode = Extract<FlowNode, { type: 'http' }>
 
@@ -18,10 +18,10 @@ type HttpNode = Extract<FlowNode, { type: 'http' }>
 export const httpExecutor: NodeExecutor<HttpNode> = {
   type: 'http',
   requires: ['fetch'],
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
+  async execute(node, inputs, ctx): Promise<ExecResult> {
     const fetchFn = ctx.services.fetch
     if (fetchFn === undefined) throw new NodeError('SERVICE_UNAVAILABLE', 'http node requires the guarded fetch service')
-    const values = resolveInputs(node, ctx.frame)
+    const values = inputs
     const url = renderTemplate(node.data.url, values).text
     const headers: Record<string, string> = {}
     for (const header of node.data.headers) {
@@ -57,20 +57,36 @@ export const httpExecutor: NodeExecutor<HttpNode> = {
       headers['content-type'] = 'application/x-www-form-urlencoded'
     }
 
-    const request = new Request(urlWithQuery, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body }),
-      redirect: 'manual',
-    })
-    const result = await fetchFn(request, { timeoutMs: node.data.timeoutMs ?? 30_000, maxResponseBytes: 2 * 1024 * 1024 })
-    return {
-      outputs: {
-        status: result.status,
-        headers: result.headers,
-        body: result.body,
-        json: result.json,
-      },
+    if ((method === 'GET' || method === 'HEAD') && body !== undefined) {
+      throw new NodeError('HTTP_BAD_BODY', `${method} requests must not include a body`)
+    }
+
+    let request: Request
+    try {
+      request = new Request(urlWithQuery, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        redirect: 'manual',
+        signal: ctx.signal,
+      })
+    } catch (error: unknown) {
+      throw new NodeError('HTTP_BAD_URL', `invalid request "${urlWithQuery.slice(0, 200)}": ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const timeoutMs = Math.min(node.data.timeoutMs ?? ctx.limits.http.timeoutMs, ctx.limits.maxNodeTimeoutMs)
+    try {
+      const result = await fetchFn(request, { timeoutMs, maxResponseBytes: ctx.limits.http.maxResponseBytes })
+      return {
+        outputs: {
+          status: result.status,
+          headers: result.headers,
+          body: result.body,
+          json: result.json,
+        },
+      }
+    } catch (error: unknown) {
+      if (error instanceof BlockedUrlError) throw new NodeError('HTTP_BLOCKED', error.message, false)
+      throw new NodeError('HTTP_NETWORK', error instanceof Error ? error.message : String(error), true)
     }
   },
 }

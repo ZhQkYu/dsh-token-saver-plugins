@@ -89,6 +89,9 @@ importers:
 
   plugins/flow:
     dependencies:
+      ipaddr.js:
+        specifier: ^2.5.0
+        version: 2.5.0
       undici:
         specifier: ^6.21.0
         version: 6.28.1
@@ -586,6 +589,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  ipaddr.js@2.5.0:
+    resolution: {integrity: sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w==}
+    engines: {node: '>= 10'}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -1202,6 +1209,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  ipaddr.js@2.5.0: {}
 
   js-tokens@4.0.0: {}
 

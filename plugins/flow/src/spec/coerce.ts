@@ -44,8 +44,6 @@ function coerceNumber(value: unknown, integer: boolean): CoerceResult {
   } else if (typeof value === 'string' && value.trim() !== '') {
     num = Number(value)
     if (Number.isNaN(num)) return { ok: false, reason: `expected number, got string "${value}"` }
-  } else if (typeof value === 'boolean') {
-    num = value ? 1 : 0
   } else {
     return { ok: false, reason: `expected ${integer ? 'integer' : 'number'}, got ${describe(value)}` }
   }
@@ -64,7 +62,10 @@ function coerceBoolean(value: unknown): CoerceResult {
 function coerceObject(value: unknown, schema: VarSchema): CoerceResult {
   let obj: Record<string, JsonValue>
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    obj = value as Record<string, JsonValue>
+    // Shallow-copy so coercion never mutates the caller's object (R4): a
+    // downstream node's type conversion must not change what an upstream node
+    // stored in the frame.
+    obj = { ...(value as Record<string, JsonValue>) }
   } else if (typeof value === 'string') {
     const parsed = safeParseJson(value)
     if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {

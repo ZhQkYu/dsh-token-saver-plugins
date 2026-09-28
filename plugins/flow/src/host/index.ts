@@ -20,6 +20,7 @@ import { registerFlowRoutes } from './routes/flows.ts'
 import { registerCatalogRoutes } from './routes/catalog.ts'
 import { registerRunRoutes } from './routes/runs.ts'
 import { LAUNCH_SESSION_SERVICES } from './session-launch.ts'
+import { resolveLimits, validateLimitsOf } from './limits.ts'
 
 export const name = 'dsh-flow'
 export const inject = ['connection', 'tools', 'llm', 'agentDefaultModel', 'sandboxPolicy', ...LAUNCH_SESSION_SERVICES]
@@ -41,44 +42,27 @@ export function apply(ctx: Context, config: FlowConfig): void {
   const runStore = new RunStore({ storageDir, maxRunEventsBytes: config.maxRunEventsBytes, keepRunsPerFlow: config.keepRunsPerFlow })
   runStore.markInterrupted()
 
+  const limits = resolveLimits(config)
   const engineConfig: EngineConfig = {
-    workspacePath: ctx.workspaceRegistry.list()[0]?.path ?? process.cwd(),
-    runAgentPreset: config.runAgentPreset,
-    runPermissionPreset: config.runPermissionPreset,
-    archiveRunSessions: config.archiveRunSessions,
-    maxConcurrentNodes: config.maxConcurrentNodes,
-    maxNodeExecutionsPerRun: config.maxNodeExecutionsPerRun,
-    maxLlmCallsPerRun: config.maxLlmCallsPerRun,
-    maxAgentNodesPerRun: config.maxAgentNodesPerRun,
-    maxRunDurationMs: config.maxRunDurationMs,
-    maxNodeTimeoutMs: config.maxNodeTimeoutMs,
-    maxNestingDepth: config.maxNestingDepth,
-    maxRegexInputChars: config.maxRegexInputChars,
-    http: config.http,
-    code: config.code,
+    ...limits,
     agent: config.agent,
-    maxValueBytes: config.maxValueBytes,
+    tools: config.tools,
   }
   const engine = new FlowEngine(ctx, flowStore, runStore, engineConfig)
   const flowTools = new FlowTools(ctx, flowStore, engine, config.tools.prefix)
 
-  const limits = {
-    maxLoopIterations: config.maxLoopIterations,
-    maxBatchConcurrency: config.maxBatchConcurrency,
-    maxBatchItems: config.maxBatchItems,
-    maxNodeTimeoutMs: config.maxNodeTimeoutMs,
-    maxRetries: 5,
-    maxNestingDepth: config.maxNestingDepth,
-    maxRegexInputChars: config.maxRegexInputChars,
-  }
-
   registerFlowRoutes(ctx, flowStore, {
     maxFlowBytes: config.maxFlowBytes,
-    limits,
-    onPublished: (flowId) => flowTools.register(flowId),
+    // Scoped (preset/agent) tools are absent from the global schema list, so TOOL_UNKNOWN stays a warning.
+    limits: () => ({ ...validateLimitsOf(limits), toolNames: new Set(ctx.tools.schemas().map(tool => tool.name)), strictTools: false }),
+    isToolNameAvailable: (flowId, name) => flowTools.isNameAvailable(flowId, name),
+    beforeDelete: (flowId) => engine.cancelFlow(flowId),
+    onPublished: (flowId) => flowTools.sync(flowId),
     onDeleted: (flowId) => flowTools.unregister(flowId),
   })
-  registerCatalogRoutes(ctx, flowStore)
+  registerCatalogRoutes(ctx, flowStore, config.tools.prefix, validateLimitsOf(limits))
   registerRunRoutes(ctx, runStore, engine)
   flowTools.sync()
+
+  ctx.effect(() => () => { void engine.dispose() }, 'dsh-flow engine teardown')
 }

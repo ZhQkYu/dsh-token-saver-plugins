@@ -3,6 +3,7 @@ CLAUDE.local.md
 *.credentials.yaml
 credentials.yaml
 PLAN.md
+docs/internal/
 apps/desktop/.env.windows
 apps/desktop/.env.macos
 apps/desktop/*.p12

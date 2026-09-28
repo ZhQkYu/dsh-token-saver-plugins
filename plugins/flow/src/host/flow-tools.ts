@@ -11,7 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import { defineTool, type ParameterSchemaSpec, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
-import type { FlowDocument, JsonValue, VarField } from '../spec/types.ts'
+import type { FlowDocument, JsonValue, RunSummary, VarField } from '../spec/types.ts'
 import { toParameterSchemaSpec, toValueSchemaSpec } from '../spec/var-schema.ts'
 import type { FlowStore } from './store/flow-store.ts'
 import type { FlowEngine } from './engine/engine.ts'
@@ -22,16 +22,35 @@ export const FLOW_TOOL_PREFIX = 'flow_'
 /** Register and sync flow-as-tool tools. */
 export class FlowTools {
   private readonly disposers = new Map<string, () => void>()
+  private readonly names = new Map<string, string>()
 
   constructor(private readonly ctx: Context, private readonly flowStore: FlowStore, private readonly engine: FlowEngine, private readonly prefix: string = FLOW_TOOL_PREFIX) {}
 
-  /** Sync tools for all flows that are published and enabled as tools. */
-  sync(): void {
+  /**
+   * Whether `flowId` may publish under tool `name`: no other flow claims it and no
+   * other registrant holds `prefix + name`.
+   */
+  isNameAvailable(flowId: string, name: string): boolean {
     for (const summary of this.flowStore.list()) {
-      const meta = this.flowStore.getMeta(summary.id)
+      if (summary.id === flowId || summary.broken === true) continue
+      if (summary.toolName === name && summary.publishedVersion !== undefined) return false
+    }
+    const full = `${this.prefix}${name}`
+    return this.ctx.tools.get(full) === undefined || this.names.get(flowId) === full
+  }
+
+  /** Sync the tool for a flow: unregister any stale registration, then re-register per current meta. */
+  sync(flowId?: string): void {
+    if (flowId !== undefined) {
+      this.unregister(flowId)
+      const meta = this.flowStore.getMeta(flowId)
       if (meta?.tool?.enabled === true && meta.publishedVersion !== undefined) {
-        this.register(summary.id)
+        this.register(flowId)
       }
+      return
+    }
+    for (const summary of this.flowStore.list()) {
+      this.sync(summary.id)
     }
   }
 
@@ -45,7 +64,11 @@ export class FlowTools {
     const flow = this.flowStore.version(flowId, version)
     if (flow === undefined) return
     const toolName = `${this.prefix}${meta.tool.name}`
-    if (this.ctx.tools.get(toolName) !== undefined) return
+    if (this.ctx.tools.get(toolName) !== undefined) {
+      // The publish route rejects taken names; this only happens when another plugin registered the name later.
+      this.ctx.logger.warn(`flow: tool name ${toolName} is taken; flow ${flowId} is not exposed as a tool`)
+      return
+    }
     const { parameters, outputFields, endMode } = describeFlow(flow)
     const parametersSchema: ParameterSchemaSpec = {}
     for (const field of parameters) {
@@ -74,18 +97,28 @@ export class FlowTools {
       timeoutMs: this.engine.timeoutMs(),
       isConcurrencySafe: () => false,
       execute: async (args, exec) => {
-        const result = await this.engine.start({
+        const { runId } = await this.engine.start({
           flowId,
           version: 'published',
           inputs: args as JsonValue,
-          caller: exec.agent === undefined ? undefined : { agent: exec.agent, parent: exec.token, rootCallId: exec.rootCallId },
+          caller: exec.agent === undefined ? undefined : { agent: exec.agent, parent: exec.token, rootCallId: exec.rootCallId, callId: exec.callId },
+          workspacePath: exec.agent?.session.header.cwd,
         })
-        const summary = await this.engine.awaitRun(result.runId)
-        const outputs = (summary.outputs ?? {}) as Record<string, JsonValue>
-        return outputs as never
+        const onAbort = (): void => { void this.engine.cancel(runId) }
+        exec.signal.addEventListener('abort', onAbort, { once: true })
+        try {
+          const summary = await this.engine.awaitRun(runId)
+          if (summary?.status !== 'succeeded') {
+            throw new Error(describeFailure(flow, summary))
+          }
+          return (summary.outputs ?? {}) as never
+        } finally {
+          exec.signal.removeEventListener('abort', onAbort)
+        }
       },
     }))
     this.disposers.set(flowId, disposer)
+    this.names.set(flowId, toolName)
   }
 
   /** Unregister the tool for a flow. */
@@ -94,13 +127,28 @@ export class FlowTools {
     if (disposer === undefined) return
     disposer()
     this.disposers.delete(flowId)
+    this.names.delete(flowId)
   }
 
-  /** Unregister a tool by name, used when the name collides. */
+  /** Unregister every flow tool. */
   releaseAll(): void {
     for (const disposer of [...this.disposers.values()]) disposer()
     this.disposers.clear()
+    this.names.clear()
   }
+}
+
+/** Describe a failed run for a tool error message, naming the failing node. */
+function describeFailure(flow: FlowDocument, summary: RunSummary | undefined): string {
+  if (summary === undefined) return `run of "${flow.name}" has no summary`
+  const parts = [`run of "${flow.name}" ${summary.status}`]
+  const error = summary.error
+  if (error !== undefined) {
+    const node = error.nodeId === undefined ? undefined : flow.nodes.find(candidate => candidate.id === error.nodeId)
+    if (node !== undefined) parts.push(`at node "${node.title}"`)
+    parts.push(`${error.code}: ${error.message}`)
+  }
+  return parts.join(' ')
 }
 
 /** The tool-facing description of a flow's inputs and outputs. */

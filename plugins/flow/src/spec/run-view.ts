@@ -24,16 +24,19 @@ export function foldRunEvents(events: readonly RunEvent[]): RunView {
       case 'run.started':
         runId = event.runId
         break
-      case 'node.started':
+      case 'node.started': {
+        const existing = nodes.get(event.execKey)
         nodes.set(event.execKey, {
           execKey: event.execKey,
           nodeId: event.nodeId,
           path: event.path,
           attempt: event.attempt,
           status: 'running',
+          ...(existing?.attempts === undefined ? {} : { attempts: existing.attempts }),
           ...(event.inputs === undefined ? {} : { inputs: event.inputs }),
         })
         break
+      }
       case 'node.finished': {
         const existing = nodes.get(event.execKey)
         nodes.set(event.execKey, {
@@ -41,6 +44,7 @@ export function foldRunEvents(events: readonly RunEvent[]): RunView {
           nodeId: event.nodeId,
           path: event.path,
           attempt: event.attempt,
+          attempts: (existing?.attempts ?? 0) + 1,
           status: event.status,
           ...(existing?.inputs === undefined ? {} : { inputs: existing.inputs }),
           ...(event.outputs === undefined ? {} : { outputs: event.outputs }),
@@ -50,6 +54,7 @@ export function foldRunEvents(events: readonly RunEvent[]): RunView {
           ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
           ...(event.logs === undefined ? {} : { logs: event.logs }),
           ...(event.warnings === undefined ? {} : { warnings: event.warnings }),
+          ...(event.rendered === undefined ? {} : { rendered: event.rendered }),
         })
         break
       }

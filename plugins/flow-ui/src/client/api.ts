@@ -1,10 +1,13 @@
 /**
  * Browser calls to the flow Connection routes. Paths are document-relative
- * (no leading slash) so they resolve under the app's own mount; non-2xx
- * responses reject with the Host's plain-text reason.
+ * (no leading slash) so they resolve under the app's own mount. Non-2xx
+ * responses reject with an {@link ApiError} carrying the Host's validation
+ * issues or typed error when the body has them.
  *
  * @module @dsh-plugins/flow-ui/client/api
  */
+
+import type { FlowDocument, FlowLookupResult, Issue, JsonValue, RunEvent, RunSummary, ValidateLimits, VarField } from '@dsh-plugins/flow/spec'
 
 /** One flow row in the list. */
 export interface FlowSummary {
@@ -19,49 +22,88 @@ export interface FlowSummary {
   reason?: string
 }
 
-/** A flow document. */
-export type FlowDocument = import('@dsh-plugins/flow/spec').FlowDocument
+/** A flow's publish metadata. */
+export interface FlowMeta {
+  publishedVersion?: number
+  tool?: { enabled: boolean; name: string; description: string }
+}
 
-/** A validation issue. */
-export type Issue = import('@dsh-plugins/flow/spec').Issue
+/** One catalog entry for subflow pickers and local validation. */
+export interface CatalogFlow {
+  id: string
+  name: string
+  published?: FlowLookupResult & { version: number }
+  draft: FlowLookupResult
+}
 
-/** A run summary. */
-export interface RunSummary {
-  runId: string
-  flowId: string
-  status: string
-  inputs: unknown
-  outputs?: unknown
-  error?: { code: string; message: string; nodeId?: string }
+/** One workspace the Host knows. */
+export interface WorkspaceSummary {
+  id: string
+  title: string
+  path: string
+}
+
+/** One tool the Host exposes to flows. */
+export interface ToolSummary {
+  name: string
+  description: string
+  parameters: unknown
+}
+
+/** A rejected request, with the Host's structured body when present. */
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string, readonly issues?: Issue[], readonly code?: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
-  if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`)
-  return await response.json() as T
+  if (response.ok) return await response.json() as T
+  const text = await response.text()
+  let body: { issues?: Issue[]; error?: { code?: string; message?: string } } | undefined
+  try {
+    body = JSON.parse(text) as typeof body
+  } catch {
+    body = undefined
+  }
+  const message = body?.error?.message ?? (body?.issues !== undefined ? body.issues.map(issue => issue.message).join('; ') : text) ?? `HTTP ${response.status}`
+  throw new ApiError(response.status, message || `HTTP ${response.status}`, body?.issues, body?.error?.code)
 }
 
 function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 }
 
+/** The flow Host API. */
 export const api = {
   flows: () => request<{ flows: FlowSummary[] }>('api/dsh-flow/flows').then(res => res.flows),
-  get: (id: string) => request<{ flow: FlowDocument; meta: { publishedVersion?: number } | null }>(`api/dsh-flow/flow?id=${encodeURIComponent(id)}`),
-  create: (name: string, description: string) => post<{ flow: { id: string } }>('api/dsh-flow/flow.create', { name, description }).then(res => res.flow),
+  get: (id: string) => request<{ flow: FlowDocument; meta: FlowMeta | null }>(`api/dsh-flow/flow?id=${encodeURIComponent(id)}`),
+  create: (name: string, description: string) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.create', { name, description }).then(res => res.flow),
   save: (flow: FlowDocument, baseRevision: number) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.save', { flow, baseRevision }).then(res => res.flow),
   remove: (id: string) => post<{ ok: true }>('api/dsh-flow/flow.delete', { id }),
-  duplicate: (id: string) => post<{ flow: { id: string } }>('api/dsh-flow/flow.duplicate', { id }).then(res => res.flow),
-  validate: (flow: FlowDocument) => post<{ issues: Issue[] }>('api/dsh-flow/flow.validate', flow).then(res => res.issues),
-  publish: (id: string, baseRevision: number, note: string, tool?: { enabled: boolean; name: string; description?: string }) =>
-    post<{ meta: { publishedVersion: number } }>('api/dsh-flow/flow.publish', { id, baseRevision, note, ...(tool === undefined ? {} : { tool }) }).then(res => res.meta),
-  startRun: (flowId: string, version: number | 'draft', inputs: unknown) =>
-    post<{ runId: string }>('api/dsh-flow/run.start', { flowId, version, inputs }).then(res => res.runId),
+  duplicate: (id: string) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.duplicate', { id }).then(res => res.flow),
+  publish: (id: string, baseRevision: number, note: string, tool: { enabled: boolean; name: string; description?: string } | undefined) =>
+    post<{ meta: FlowMeta }>('api/dsh-flow/flow.publish', { id, baseRevision, note, ...(tool === undefined ? {} : { tool }) }).then(res => res.meta),
+  startRun: (flowId: string, inputs: JsonValue, workspaceId: string) =>
+    post<{ runId: string }>('api/dsh-flow/run.start', { flowId, version: 'draft', inputs, workspaceId }).then(res => res.runId),
   cancelRun: (runId: string) => post<{ ok: true }>('api/dsh-flow/run.cancel', { runId }),
-  getRun: (runId: string) => request<{ summary: RunSummary }>(`api/dsh-flow/run.get?runId=${encodeURIComponent(runId)}`),
+  answer: (runId: string, execKey: string, answer: { text?: string; optionId?: string }) => post<{ ok: true }>('api/dsh-flow/run.answer', { runId, execKey, answer }),
+  getRun: (runId: string) => request<{ summary: RunSummary; events: RunEvent[] }>(`api/dsh-flow/run.get?runId=${encodeURIComponent(runId)}`),
+  workspaces: () => request<{ workspaces: WorkspaceSummary[] }>('api/dsh-flow/catalog.workspaces').then(res => res.workspaces),
+  catalogFlows: () => request<{ flows: CatalogFlow[] }>('api/dsh-flow/catalog.flows').then(res => res.flows),
+  limits: () => request<{ limits: ValidateLimits }>('api/dsh-flow/catalog.limits').then(res => res.limits),
+  tools: () => request<{ tools: ToolSummary[] }>('api/dsh-flow/catalog.tools').then(res => res.tools),
 }
 
 /** Error text for display. */
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** The start fields of a flow, for the run inputs form. */
+export function startFieldsOf(flow: FlowDocument): (VarField & { default?: JsonValue })[] {
+  const start = flow.nodes.find(node => node.type === 'start')
+  return start?.type === 'start' ? start.data.fields : []
 }

@@ -41,10 +41,21 @@ export const assignExecutor: NodeExecutor<AssignNode> = {
     if (container.inner === undefined) throw new NodeError('BAD_PARENT', 'assign node must be inside a loop container')
     for (const assignment of node.data.assignments) {
       const raw = resolveRef(ctx.frame, assignment.value)
-      const coerced = coerce(raw ?? null, { type: 'any' })
+      const schema = loopVarSchema(container, assignment.variable)
+      const coerced = coerce(raw ?? null, schema)
       if (!coerced.ok) throw new NodeError('INPUT_TYPE', `assign "${assignment.variable}": ${coerced.reason}`)
       container.inner[assignment.variable] = coerced.value
     }
     return { outputs: {} }
   },
+}
+
+/** The schema of a loop variable, from the loop node that owns the container. */
+function loopVarSchema(container: import('../engine/frames.ts').Frame, variable: string): import('../../spec/types.ts').VarSchema {
+  const loopNode = container.parent?.plan.scopes.get(container.parent.scope)?.nodes.find(n => n.id === container.scope && n.type === 'loop')
+  if (loopNode !== undefined && loopNode.type === 'loop') {
+    const v = loopNode.data.variables.find(v => v.name === variable)
+    if (v !== undefined) return v.schema
+  }
+  return { type: 'any' }
 }

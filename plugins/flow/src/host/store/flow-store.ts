@@ -87,12 +87,14 @@ export class FlowStore {
     for (const name of fs.readdirSync(this.flowsDir)) {
       if (!name.endsWith('.json') || name.endsWith('.meta.json')) continue
       const flowId = name.slice(0, -'.json'.length)
-      const doc = this.get(flowId)
+      if (!ID_PATTERN.test(flowId)) continue
+      const read = this.readFlowFile(path.join(this.flowsDir, name))
       const meta = this.getMeta(flowId)
-      if (doc === undefined) {
-        out.push({ id: flowId, name: flowId, description: '', updatedAt: 0, nodeCount: 0, broken: true, reason: 'unreadable draft' })
+      if (!read.ok) {
+        out.push({ id: flowId, name: flowId, description: '', updatedAt: 0, nodeCount: 0, broken: true, reason: read.reason })
         continue
       }
+      const doc = read.doc
       out.push({
         id: doc.id,
         name: doc.name,
@@ -109,21 +111,22 @@ export class FlowStore {
   /** Read one flow draft by id. */
   get(id: string): FlowDocument | undefined {
     this.assertId(id)
-    return this.readFlowFile(path.join(this.flowsDir, `${id}.json`))
+    const read = this.readFlowFile(path.join(this.flowsDir, `${id}.json`))
+    return read.ok ? read.doc : undefined
   }
 
-  private readFlowFile(filePath: string): FlowDocument | undefined {
+  private readFlowFile(filePath: string): { ok: true; doc: FlowDocument } | { ok: false; reason: string } {
     let raw: string
     try {
       raw = fs.readFileSync(filePath, 'utf8')
-    } catch {
-      return undefined
+    } catch (error: unknown) {
+      return { ok: false, reason: `unreadable draft: ${error instanceof Error ? error.message : String(error)}` }
     }
-    if (Buffer.byteLength(raw) > this.config.maxFlowBytes) return undefined
+    if (Buffer.byteLength(raw) > this.config.maxFlowBytes) return { ok: false, reason: `draft exceeds maxFlowBytes (${this.config.maxFlowBytes})` }
     try {
-      return flowDocumentSchema.parse(JSON.parse(raw))
-    } catch {
-      return undefined
+      return { ok: true, doc: flowDocumentSchema.parse(JSON.parse(raw)) }
+    } catch (error: unknown) {
+      return { ok: false, reason: `invalid draft: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}` }
     }
   }
 
@@ -167,13 +170,13 @@ export class FlowStore {
     return doc
   }
 
-  /** Save (create or replace) a flow, enforcing optimistic concurrency. */
+  /** Save (replace) an existing flow, enforcing optimistic concurrency. */
   save(flow: FlowDocument, baseRevision: number): Promise<FlowDocument> {
     this.assertId(flow.id)
     return this.lock(flow.id).run(async () => {
       const current = this.get(flow.id)
-      const currentRevision = current?.revision ?? 0
-      if (currentRevision !== baseRevision) throw new RevisionConflictError()
+      if (current === undefined) throw new Error(`flow ${flow.id} not found`)
+      if (current.revision !== baseRevision) throw new RevisionConflictError()
       const next = { ...flow, revision: baseRevision + 1, updatedAt: Date.now() }
       this.writeDraft(next)
       return next
@@ -211,22 +214,18 @@ export class FlowStore {
     }
   }
 
-  /** Duplicate a flow into a new id, resetting revision and dropping meta/tool. */
+  /** Duplicate a flow into a new id, resetting revision and dropping meta/tool/versions. */
   duplicate(id: string): FlowDocument {
     const source = this.get(id)
     if (source === undefined) throw new Error(`flow ${id} not found`)
     const newId = `flow-${randomUUID().slice(0, 12)}`
     const now = Date.now()
+    // Node/edge ids stay unchanged: they are only unique within a document, and
+    // rewriting them would leave dangling references (R5 / DANGLING_REF).
     const doc: FlowDocument = {
       ...source,
       id: newId,
       name: `${source.name} (copy)`,
-      nodes: source.nodes.map(node => ({
-        ...node,
-        id: `${node.id}-copy`,
-        ...(node.parentId === undefined ? {} : { parentId: `${node.parentId}-copy` }),
-      })),
-      edges: source.edges.map(edge => ({ ...edge, id: `${edge.id}-copy`, source: `${edge.source}-copy`, target: `${edge.target}-copy` })),
       revision: 1,
       updatedAt: now,
     }
@@ -236,7 +235,7 @@ export class FlowStore {
   }
 
   /** Publish a flow: validate is the caller's job, here we snapshot and bump version. */
-  publish(id: string, baseRevision: number, note: string, tool: { enabled: boolean; name: string; description: string } | undefined): Promise<FlowMeta> {
+  publish(id: string, baseRevision: number, note: string, tool: { enabled: boolean; name: string; description?: string } | undefined): Promise<FlowMeta> {
     this.assertId(id)
     return this.lock(id).run(async () => {
       const current = this.get(id)
@@ -252,7 +251,7 @@ export class FlowStore {
       const nextMeta: FlowMeta = {
         ...meta,
         publishedVersion: version,
-        ...(tool === undefined ? {} : { tool: { enabled: tool.enabled, name: tool.name, description: tool.description } }),
+        ...(tool === undefined ? {} : { tool: { enabled: tool.enabled, name: tool.name, description: tool.description ?? '' } }),
       }
       this.writeMeta(id, nextMeta)
       return nextMeta
@@ -264,6 +263,7 @@ export class FlowStore {
     this.assertId(id)
     const versionsDir = path.join(this.flowsDir, id, 'versions')
     const out: VersionMeta[] = []
+    if (!fs.existsSync(versionsDir)) return out
     for (const name of fs.readdirSync(versionsDir)) {
       if (!name.endsWith('.meta.json')) continue
       const version = Number(name.slice(0, -'.meta.json'.length))
@@ -291,8 +291,9 @@ export class FlowStore {
     return this.getMeta(id)?.publishedVersion
   }
 
-  /** Import a flow, reassigning ids and resetting revision. */
+  /** Import a flow, reassigning the flow id and resetting revision. */
   import(doc: FlowDocument): FlowDocument {
+    if (doc.schemaVersion !== 1) throw new Error(`unsupported schema version ${doc.schemaVersion}`)
     const newId = `flow-${randomUUID().slice(0, 12)}`
     const now = Date.now()
     const next: FlowDocument = {
@@ -301,7 +302,6 @@ export class FlowStore {
       name: doc.name,
       revision: 1,
       updatedAt: now,
-      nodes: doc.nodes.map(node => ({ ...node, id: `${node.id}` })),
     }
     this.writeDraft(next)
     this.writeMeta(newId, { createdAt: now })
@@ -319,7 +319,7 @@ export class FlowStore {
       doc = this.version(flowId, version)
     }
     if (doc === undefined) return undefined
-    return { inputs: startInputs(doc), outputs: endOutputs(doc) }
+    return { inputs: startInputs(doc), outputs: endOutputs(doc), subflows: subflowRefs(doc) }
   }
 }
 
@@ -339,4 +339,9 @@ function endOutputs(doc: FlowDocument): VarField[] {
     return end.data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
   }
   return []
+}
+
+/** The subflows a document references directly. */
+function subflowRefs(doc: FlowDocument): { flowId: string; version: 'published' | 'draft' }[] {
+  return doc.nodes.flatMap(node => node.type === 'subflow' && node.data.flowId !== '' ? [{ flowId: node.data.flowId, version: node.data.version }] : [])
 }

@@ -11,7 +11,6 @@ import { coerce } from '../../spec/coerce.ts'
 import { toObjectJsonSchema } from '../../spec/var-schema.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
-import { resolveInputs } from './resolve.ts'
 
 type AgentNode = Extract<FlowNode, { type: 'agent' }>
 
@@ -19,10 +18,10 @@ type AgentNode = Extract<FlowNode, { type: 'agent' }>
 export const agentExecutor: NodeExecutor<AgentNode> = {
   type: 'agent',
   requires: ['subagents', 'agent'],
-  async execute(node, _inputs, ctx): Promise<ExecResult> {
+  async execute(node, inputs, ctx): Promise<ExecResult> {
     const subagents = ctx.services.subagents
     if (subagents === undefined) throw new NodeError('SERVICE_UNAVAILABLE', 'agent node requires the subagents service')
-    const values = resolveInputs(node, ctx.frame)
+    const values = inputs
     const prompt = renderTemplate(node.data.prompt, values).text
     const binding = await ctx.agent()
     ctx.budget.consumeAgentNode()
@@ -34,7 +33,9 @@ export const agentExecutor: NodeExecutor<AgentNode> = {
       signal: ctx.signal,
       ...(node.data.model === undefined ? {} : { agentOptions: { provider: node.data.model.provider, model: node.data.model.model } }),
       ...(fields === undefined ? {} : { outputSchema: toObjectJsonSchema(fields) }),
-      ...(node.data.tools === undefined ? {} : { toolFilter: { allow: node.data.tools.allow ?? [] } }),
+      // Only pass a toolFilter when an explicit `allow` list is set; an empty
+      // `tools: {}` must not disable every tool.
+      ...(node.data.tools?.allow === undefined ? {} : { toolFilter: { allow: node.data.tools.allow } }),
       ...(node.data.persona === undefined ? {} : { persona: node.data.persona }),
     })
     try {

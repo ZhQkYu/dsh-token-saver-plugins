@@ -23,6 +23,7 @@ export const intentSpec: NodeSpec<IntentNode> = {
   ],
   outputs: () => [
     { name: 'intent', schema: { type: 'string' } },
+    { name: 'intentId', schema: { type: 'string' } },
     { name: 'reason', schema: { type: 'string' } },
   ],
   validate: (node, ctx): Issue[] => {

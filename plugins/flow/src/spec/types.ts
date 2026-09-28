@@ -17,6 +17,15 @@ export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
 /** Flow, node, and run id (no path traversal). */
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
+/** The schema-level maximum retries a node error policy may request. */
+export const MAX_NODE_RETRIES = 5
+
+/** Heartbeat interval for the `run.events` NDJSON stream, in milliseconds. */
+export const RUN_EVENTS_PING_MS = 15_000
+
+/** The part of a flow tool name after the configured prefix (`flow_<name>`). */
+export const FLOW_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,40}$/
+
 /** A JSON-compatible value. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -311,7 +320,15 @@ export interface PortSpec {
 
 /** The host-provided lookup for subflow input/output derivation. `'published'` resolves to the latest published version. */
 export interface FlowLookup {
-  (flowId: string, version: number | 'published' | 'draft'): { inputs: VarField[]; outputs: VarField[] } | undefined
+  (flowId: string, version: number | 'published' | 'draft'): FlowLookupResult | undefined
+}
+
+/** What a {@link FlowLookup} knows about one flow version. */
+export interface FlowLookupResult {
+  inputs: VarField[]
+  outputs: VarField[]
+  /** Subflows the version itself references, for recursion and depth checks. */
+  subflows?: { flowId: string; version: 'published' | 'draft' }[]
 }
 
 /** Validation context handed to node-level validators. */
@@ -390,6 +407,8 @@ export type RunEvent = { seq: number; time: number } & (
       durationMs?: number
       logs?: string[]
       warnings?: string[]
+      /** The rendered model-facing text for an LLM node (system/prompt), after truncation. */
+      rendered?: { system?: string; prompt?: string }
     }
   | { type: 'run.waiting'; execKey: string; question: string; answer: AnswerSpec }
   | { type: 'run.resumed'; execKey: string }
@@ -429,6 +448,10 @@ export interface RunSummary {
   finishedAt?: number
   usage: TokenUsageLite
   nodeExecutions: number
+  /** The workspace directory the run executed against; absent in summaries written before it was recorded. */
+  workspacePath?: string
+  /** Set when persisted events were truncated past the byte limit. */
+  eventsTruncated?: boolean
 }
 
 /** A folded node status from the run-view. */
@@ -437,6 +460,8 @@ export interface RunViewNode {
   nodeId: string
   path: FrameStep[]
   attempt: number
+  /** Total attempts across all retries for this execKey. */
+  attempts?: number
   status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled'
   inputs?: JsonValue
   outputs?: JsonValue
@@ -446,6 +471,8 @@ export interface RunViewNode {
   durationMs?: number
   logs?: string[]
   warnings?: string[]
+  /** The rendered model-facing text for an LLM node. */
+  rendered?: { system?: string; prompt?: string }
 }
 
 /** The folded view of one run, shared by the Host `run.get` route and the UI. */
@@ -485,4 +512,5 @@ export const ROUTES = {
   catalogTools: '/api/dsh-flow/catalog.tools',
   catalogFlows: '/api/dsh-flow/catalog.flows',
   catalogWorkspaces: '/api/dsh-flow/catalog.workspaces',
+  catalogLimits: '/api/dsh-flow/catalog.limits',
 } as const

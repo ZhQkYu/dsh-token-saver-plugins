@@ -89,7 +89,7 @@ describe('RunStore', () => {
     const runStore = new RunStore({ storageDir: dir, maxRunEventsBytes: 1024, keepRunsPerFlow: 5 })
     const run: RunSummary = {
       runId: 'run-1', flowId: 'flow-1', flowName: 'F', version: 'draft', trigger: { kind: 'canvas' },
-      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0,
+      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0, workspacePath: '/tmp',
     }
     runStore.start(run)
     expect(runStore.get('run-1')?.runId).toBe('run-1')
@@ -100,7 +100,7 @@ describe('RunStore', () => {
     const runStore = new RunStore({ storageDir: dir, maxRunEventsBytes: 1024, keepRunsPerFlow: 5 })
     const run: RunSummary = {
       runId: 'run-1', flowId: 'flow-1', flowName: 'F', version: 'draft', trigger: { kind: 'canvas' },
-      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0,
+      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0, workspacePath: '/tmp',
     }
     runStore.start(run)
     runStore.appendEvent(run, { seq: 1, time: 1, type: 'run.started', runId: 'run-1', flowId: 'flow-1', version: 'draft', inputs: {} })
@@ -111,7 +111,7 @@ describe('RunStore', () => {
     const runStore = new RunStore({ storageDir: dir, maxRunEventsBytes: 1024, keepRunsPerFlow: 5 })
     const run: RunSummary = {
       runId: 'run-1', flowId: 'flow-1', flowName: 'F', version: 'draft', trigger: { kind: 'canvas' },
-      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0,
+      status: 'running', inputs: {}, startedAt: 0, usage: { inputTokens: 0, outputTokens: 0 }, nodeExecutions: 0, workspacePath: '/tmp',
     }
     runStore.start(run)
     runStore.markInterrupted()

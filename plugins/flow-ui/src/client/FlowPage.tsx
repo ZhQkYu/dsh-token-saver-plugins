@@ -1,33 +1,34 @@
 /**
- * The flow main panel page. Shows the flow list; opening a flow loads the
- * canvas editor. Saving updates the list.
+ * The flow main panel page: the flow list, or the editor for the opened flow.
  *
  * @module @dsh-plugins/flow-ui/client/FlowPage
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ReactFlowProvider } from '@xyflow/react'
 import type { FlowDocument } from '@dsh-plugins/flow/spec'
-import { api, errorText, type FlowSummary } from './api.ts'
+import { api, errorText, type FlowMeta, type FlowSummary } from './api.ts'
 import { FlowList } from './FlowList.tsx'
 import { Editor } from './editor/Editor.tsx'
+import type { Translate } from './locales.ts'
 
-/** Props for {@link FlowPage}. */
+/** Props the main slot passes. */
 export interface FlowPageProps {
-  t: (key: string) => string
+  t: Translate
 }
 
 /** The flow main panel page. */
-export function FlowPage({ t }: FlowPageProps): JSX.Element {
+export function FlowPage({ t }: FlowPageProps): ReactNode {
   const [flows, setFlows] = useState<FlowSummary[]>([])
-  const [openId, setOpenId] = useState<string | undefined>(undefined)
-  const [flow, setFlow] = useState<FlowDocument | undefined>(undefined)
-  const [error, setError] = useState<string>('')
+  const [opened, setOpened] = useState<{ flow: FlowDocument; meta: FlowMeta | null } | undefined>(undefined)
+  const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
   const reload = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       setFlows(await api.flows())
+      setError('')
     } catch (caught: unknown) {
       setError(errorText(caught))
     } finally {
@@ -38,51 +39,35 @@ export function FlowPage({ t }: FlowPageProps): JSX.Element {
   useEffect(() => { void reload() }, [reload])
 
   const open = useCallback(async (id: string): Promise<void> => {
-    setError('')
-    setLoading(true)
     try {
-      const { flow } = await api.get(id)
-      setFlow(flow)
-      setOpenId(id)
+      setOpened(await api.get(id))
+      setError('')
     } catch (caught: unknown) {
       setError(errorText(caught))
-    } finally {
-      setLoading(false)
     }
   }, [])
 
-  const close = useCallback((): void => {
-    setFlow(undefined)
-    setOpenId(undefined)
-    void reload()
-  }, [reload])
-
-  const onSaved = useCallback((): void => {
-    void reload()
-  }, [reload])
-
-  const create = useCallback(async (name: string): Promise<void> => {
-    setError('')
-    try {
-      const created = await api.create(name, '')
-      await open(created.id)
-    } catch (caught: unknown) {
-      setError(errorText(caught))
-    }
-  }, [open])
-
-  if (openId !== undefined && flow !== undefined) {
-    return <Editor flow={flow} onSaved={onSaved} t={t} />
+  const run = (action: () => Promise<unknown>): void => {
+    action().then(() => reload()).catch((caught: unknown) => { setError(errorText(caught)) })
   }
 
+  if (opened !== undefined) {
+    return (
+      <ReactFlowProvider>
+        <Editor key={opened.flow.id} flow={opened.flow} meta={opened.meta} t={t} onBack={() => { setOpened(undefined); void reload() }} />
+      </ReactFlowProvider>
+    )
+  }
   return (
     <FlowList
       t={t}
       flows={flows}
       loading={loading}
       error={error}
-      onCreate={create}
-      onOpen={id => { void open(id) }}
+      onCreate={(name) => { api.create(name, '').then(flow => open(flow.id)).catch((caught: unknown) => { setError(errorText(caught)) }) }}
+      onOpen={(id) => { void open(id) }}
+      onDuplicate={(id) => { run(() => api.duplicate(id)) }}
+      onDelete={(id) => { run(() => api.remove(id)) }}
     />
   )
 }

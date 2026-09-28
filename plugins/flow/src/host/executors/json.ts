@@ -18,16 +18,20 @@ export const jsonExecutor: NodeExecutor<JsonNode> = {
   async execute(node, _inputs, ctx): Promise<ExecResult> {
     const raw = resolveRef(ctx.frame, node.data.input)
     if (node.data.op === 'parse') {
-      if (typeof raw !== 'string') throw new NodeError('INPUT_TYPE', 'json.parse requires a string input')
+      // Coerce non-string input to string first (e.g. a number becomes "5").
+      const text = typeof raw === 'string' ? raw : raw === null ? '' : JSON.stringify(raw)
       let parsed: unknown
       try {
-        parsed = JSON.parse(raw)
+        parsed = JSON.parse(text)
       } catch {
-        throw new NodeError('OUTPUT_TYPE', 'input is not valid JSON', true)
+        throw new NodeError('JSON_PARSE', 'input is not valid JSON', false)
       }
       const outputs = node.data.outputs ?? [{ name: 'value', schema: { type: 'any' } }]
       const result: Record<string, unknown> = {}
       for (const field of outputs) {
+        if (field.name !== 'value' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))) {
+          throw new NodeError('OUTPUT_TYPE', `json.parse field "${field.name}" requires an object root`)
+        }
         const value = field.name === 'value' ? parsed : (parsed as Record<string, unknown>)[field.name]
         const coerced = coerce(value ?? null, field.schema)
         if (!coerced.ok) throw new NodeError('OUTPUT_TYPE', `json.parse field "${field.name}": ${coerced.reason}`)

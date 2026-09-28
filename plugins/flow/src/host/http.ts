@@ -9,6 +9,14 @@
 /** Default cap for a buffered POST body, in bytes. */
 export const MAX_BODY_BYTES = 1_000_000
 
+/** A request body that is too large, not JSON, or does not match its schema: always a client error. */
+export class RequestBodyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RequestBodyError'
+  }
+}
+
 /** The part of a zod schema this helper uses; the first issue becomes the error message. */
 export interface BodySchema<T> {
   safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } }
@@ -25,25 +33,25 @@ export interface BodySchema<T> {
 export async function readJsonBody<T>(request: Request, schema: BodySchema<T>, cap = MAX_BODY_BYTES): Promise<T> {
   const contentLength = Number(request.headers.get('content-length') ?? '0')
   if (Number.isFinite(contentLength) && contentLength > cap) {
-    throw new Error(`request body exceeds ${cap} bytes`)
+    throw new RequestBodyError(`request body exceeds ${cap} bytes`)
   }
   let raw: string
   try {
     raw = await request.text()
   } catch {
-    throw new Error('unable to read request body')
+    throw new RequestBodyError('unable to read request body')
   }
-  if (raw.length > cap) throw new Error(`request body exceeds ${cap} bytes`)
+  if (Buffer.byteLength(raw) > cap) throw new RequestBodyError(`request body exceeds ${cap} bytes`)
   let value: unknown
   try {
     value = JSON.parse(raw)
   } catch {
-    throw new Error('request body is not valid JSON')
+    throw new RequestBodyError('request body is not valid JSON')
   }
   const parsed = schema.safeParse(value)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
-    throw new Error(`invalid request: ${issue === undefined ? 'bad value' : `${issue.path.join('.') || '(root)'}: ${issue.message}`}`)
+    throw new RequestBodyError(`invalid request: ${issue === undefined ? 'bad value' : `${issue.path.join('.') || '(root)'}: ${issue.message}`}`)
   }
   return parsed.data
 }

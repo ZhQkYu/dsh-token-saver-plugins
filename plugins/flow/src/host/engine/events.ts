@@ -10,6 +10,7 @@ import type { RunEvent } from '../../spec/types.ts'
 /** A live event fan-out keyed by run id. */
 export class EventHub {
   private readonly subscribers = new Map<string, Set<(event: RunEvent) => void>>()
+  private readonly closers = new Map<string, Set<() => void>>()
 
   /** Subscribe to a run's live events; returns an unsubscribe function. */
   subscribe(runId: string, callback: (event: RunEvent) => void): () => void {
@@ -25,6 +26,20 @@ export class EventHub {
     }
   }
 
+  /** Register a close callback for a run, fired when the run's stream ends. */
+  onClose(runId: string, callback: () => void): () => void {
+    let set = this.closers.get(runId)
+    if (set === undefined) {
+      set = new Set()
+      this.closers.set(runId, set)
+    }
+    set.add(callback)
+    return () => {
+      set.delete(callback)
+      if (set.size === 0) this.closers.delete(runId)
+    }
+  }
+
   /** Emit an event to all live subscribers of a run. */
   emit(runId: string, event: RunEvent): void {
     const set = this.subscribers.get(runId)
@@ -36,6 +51,22 @@ export class EventHub {
         // A subscriber throwing must not break the run.
       }
     }
+  }
+
+  /** Close a run's stream: notify all close callbacks and drop subscribers. */
+  close(runId: string): void {
+    const closers = this.closers.get(runId)
+    if (closers !== undefined) {
+      for (const callback of [...closers]) {
+        try {
+          callback()
+        } catch {
+          // A closer throwing must not break the run.
+        }
+      }
+      this.closers.delete(runId)
+    }
+    this.subscribers.delete(runId)
   }
 
   /** Whether a run has live subscribers. */

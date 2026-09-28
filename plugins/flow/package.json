@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "ipaddr.js": "^2.5.0",
     "undici": "^6.21.0",
     "zod": "^4.4.3"
   },
