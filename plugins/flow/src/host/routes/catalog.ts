@@ -16,6 +16,7 @@ import { ROUTES } from '../../spec/types.ts'
 import type { ValidateLimits } from '../../spec/validate.ts'
 import { json, errorResponse } from '../http.ts'
 import type { FlowStore } from '../store/flow-store.ts'
+import { knownToolSchemas } from '../known-tools.ts'
 
 /** Register the catalog routes. */
 export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix: string, limits: ValidateLimits): void {
@@ -45,8 +46,7 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix
     requestBody: 'buffered',
     fetch: async () => {
       try {
-        const tools = ctx.tools.schemas()
-        const visible = tools.filter(tool => tool.name !== 'run_code' && !tool.name.startsWith(toolPrefix))
+        const visible = knownToolSchemas(ctx).filter(tool => tool.name !== 'run_code' && !tool.name.startsWith(toolPrefix))
         return json({ tools: visible.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) })
       } catch (error: unknown) {
         return errorResponse(error, 500)

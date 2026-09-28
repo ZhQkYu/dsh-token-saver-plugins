@@ -42,6 +42,7 @@ function fakeCtx(workspacePath: string): never {
     logger: { warn: () => {}, debug: () => {} },
     get: () => undefined,
     tools: { schemas: () => [], execute: async () => ({ isError: false, value: null, content: [] }) },
+    agents: { roots: () => [] },
     workspaceRegistry: { get: (id: string) => id === 'ws' ? { path: workspacePath } : undefined },
     llm: { stream: async function* () {} },
     agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) },

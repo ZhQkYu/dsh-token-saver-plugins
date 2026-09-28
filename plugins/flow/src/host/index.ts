@@ -18,6 +18,7 @@ import { FlowStore } from './store/flow-store.ts'
 import { RunStore } from './store/run-store.ts'
 import { registerFlowRoutes } from './routes/flows.ts'
 import { registerCatalogRoutes } from './routes/catalog.ts'
+import { knownToolSchemas } from './known-tools.ts'
 import { registerRunRoutes } from './routes/runs.ts'
 import { LAUNCH_SESSION_SERVICES } from './session-launch.ts'
 import { resolveLimits, validateLimitsOf } from './limits.ts'
@@ -53,8 +54,8 @@ export function apply(ctx: Context, config: FlowConfig): void {
 
   registerFlowRoutes(ctx, flowStore, {
     maxFlowBytes: config.maxFlowBytes,
-    // Scoped (preset/agent) tools are absent from the global schema list, so TOOL_UNKNOWN stays a warning.
-    limits: () => ({ ...validateLimitsOf(limits), toolNames: new Set(ctx.tools.schemas().map(tool => tool.name)), strictTools: false }),
+    // Tools of presets without a live Agent stay unknown, so TOOL_UNKNOWN stays a warning.
+    limits: () => ({ ...validateLimitsOf(limits), toolNames: new Set(knownToolSchemas(ctx).map(tool => tool.name)), strictTools: false }),
     isToolNameAvailable: (flowId, name) => flowTools.isNameAvailable(flowId, name),
     beforeDelete: (flowId) => engine.cancelFlow(flowId),
     onPublished: (flowId) => flowTools.sync(flowId),

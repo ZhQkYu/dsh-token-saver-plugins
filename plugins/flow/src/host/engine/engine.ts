@@ -33,6 +33,7 @@ import type { RunStore } from '../store/run-store.ts'
 import { RunAgentManager } from '../services/run-agent.ts'
 import { createGuardedFetch } from '../services/guarded-fetch.ts'
 import { validateLimitsOf, type FlowLimits } from '../limits.ts'
+import { knownToolSchemas } from '../known-tools.ts'
 import { recordValue } from './record.ts'
 
 /** Engine configuration drawn from the resolved limits. */
@@ -654,7 +655,7 @@ export class FlowEngine {
 
   private validateLimits(): ReturnType<typeof validateLimitsOf> {
     // Scoped (preset/agent) tools are absent from the global schema list, so an unknown tool stays a warning.
-    return { ...validateLimitsOf(this.config), toolNames: new Set(this.ctx.tools.schemas().map(tool => tool.name)), strictTools: false }
+    return { ...validateLimitsOf(this.config), toolNames: new Set(knownToolSchemas(this.ctx).map(tool => tool.name)), strictTools: false }
   }
 
   private resolveWorkspace(workspaceId: string | undefined, workspacePath: string | undefined): string {

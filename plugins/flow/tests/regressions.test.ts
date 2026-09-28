@@ -330,3 +330,25 @@ describe('validation coverage added in review', () => {
     expect(issues.some(issue => issue.field === 'outputs.0.value')).toBe(false)
   })
 })
+
+describe('in-progress drafts', () => {
+  it('saves nodes the editor is still filling in and reports what is missing through validation', async () => {
+    const { flowDocumentSchema } = await import('../src/host/schemas.ts')
+    const node = (value: Record<string, unknown>): FlowNode => ({ position: { x: 0, y: 0 }, title: '', ...value }) as never
+    const doc: FlowDocument = {
+      schemaVersion: 1, id: 'draft', name: 'draft', description: '', revision: 1, updatedAt: 0,
+      nodes: [
+        node({ id: 'start', type: 'start', data: { fields: [] } }),
+        node({ id: 'agg', type: 'aggregate', data: { groups: [] } }),
+        node({ id: 'cond', type: 'condition', data: { branches: [{ id: 'b', label: '', logic: 'and', conditions: [] }] } }),
+        node({ id: 'ask', type: 'question', data: { inputs: [], question: 'q', answer: { kind: 'options', options: [{ id: 'o', label: '' }], allowOther: false } } }),
+        node({ id: 'intent', type: 'intent', data: { inputs: [], query: 'q', intents: [] } }),
+        node({ id: 'end', type: 'end', data: { mode: 'variables', inputs: [] } }),
+      ],
+      edges: [],
+    }
+    expect(flowDocumentSchema.safeParse(doc).success).toBe(true)
+    const fields = validateFlow(doc, () => undefined).filter(issue => issue.code === 'BAD_NAME').map(issue => issue.field)
+    expect(fields).toEqual(expect.arrayContaining(['branches.0.label', 'branches.0.conditions', 'answer.options.o.label', 'intents']))
+  })
+})

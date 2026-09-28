@@ -119,7 +119,7 @@ Unreadable drafts are listed as broken with the reason instead of being hidden. 
 - Registering flow tools changes the main Agent's tool list, which invalidates the prompt cache.
 - LLM JSON output relies on prompt instructions plus one repair attempt; there is no native JSON-schema mode.
 - LLM calls made by flow nodes are recorded in the run events, not in a DSH session log; `agent` and `tool` nodes are logged natively.
-- Unknown tool names are warnings: tools registered only in a preset or agent scope do not appear in the global catalog.
+- Tool names are checked against global tools and the tools visible to live root Agents (`catalog.tools` lists the same set); unknown names are warnings, because preset tools without an open session are not visible.
 
 ## DSH surface
 
@@ -132,3 +132,4 @@ Unreadable drafts are listed as broken with the reason instead of being hidden. 
 | `host/services/run-agent.ts`, `session-launch.ts` | `agents.create`, `agentPresets.resolve/acquireScope/mount`, `workspaceRegistry.create/archiveSession`, `permissionPresets`, `sessionTitle.rename` |
 | `host/flow-tools.ts` | `defineTool`, `ctx.tools.register/get` |
 | `host/routes/*` | `ctx.connection.fetch.register`, `ctx.llm.listProviders/listModels`, `ctx.workspaceRegistry.list` |
+| `host/known-tools.ts` | `ctx.tools.schemas(scope?)`, `ctx.agents.roots` |

@@ -39,6 +39,9 @@ export const conditionSpec: NodeSpec<ConditionNode> = {
         issues.push({ severity: 'error', code: 'DUPLICATE_NAME', message: `duplicate branch id "${branch.id}"`, nodeId: node.id, field: `branches.${index}.id` })
       }
       seen.add(branch.id)
+      if (branch.label.trim() === '') {
+        issues.push({ severity: 'error', code: 'BAD_NAME', message: `branch ${index + 1} label must not be empty`, nodeId: node.id, field: `branches.${index}.label` })
+      }
       if (branch.conditions.length === 0) {
         issues.push({ severity: 'error', code: 'BAD_NAME', message: `branch "${branch.id}" has no conditions`, nodeId: node.id, field: `branches.${index}.conditions` })
       }

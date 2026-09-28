@@ -43,6 +43,9 @@ export const questionSpec: NodeSpec<QuestionNode> = {
           issues.push({ severity: 'error', code: 'DUPLICATE_NAME', message: `duplicate option id "${option.id}"`, nodeId: node.id, field: `answer.options.${option.id}` })
         }
         seen.add(option.id)
+        if (option.label.trim() === '') {
+          issues.push({ severity: 'error', code: 'BAD_NAME', message: `option "${option.id}" label must not be empty`, nodeId: node.id, field: `answer.options.${option.id}.label` })
+        }
       }
     }
     const seen = new Set<string>()
