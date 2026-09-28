@@ -98,6 +98,19 @@ export const NODE_TYPES = [
 ] as const
 export type NodeType = (typeof NODE_TYPES)[number]
 
+/**
+ * What a flow document is: `flow` runs in the engine with typed data flow;
+ * `guided` is a step list a model follows (in a conversation, or as one agent
+ * step inside another flow).
+ */
+export const FLOW_KINDS = ['flow', 'guided'] as const
+export type FlowKind = (typeof FLOW_KINDS)[number]
+
+/** The node types a guided flow may contain; the rest need the engine's typed data flow. */
+export const GUIDED_NODE_TYPES: readonly NodeType[] = [
+  'start', 'end', 'agent', 'tool', 'condition', 'loop', 'break', 'continue', 'subflow', 'question', 'message', 'comment',
+]
+
 /** Start node data: declared input fields with optional defaults. */
 export interface StartData {
   fields: (VarField & { default?: JsonValue })[]
@@ -211,6 +224,8 @@ export interface LoopData {
   maxIterations: number
   variables: { name: string; schema: VarSchema; initial: ValueSource }[]
   outputs: { name: string; value: ValueSource }[]
+  /** Guided flows: the natural-language condition that ends the loop early. */
+  until?: string
 }
 
 /** Batch node data. */
@@ -304,6 +319,8 @@ export interface FlowDocument {
   id: string
   name: string
   description: string
+  /** Absent means `flow`. */
+  kind?: FlowKind
   /** React Flow requires a container to precede its children. */
   nodes: FlowNode[]
   edges: FlowEdge[]
@@ -329,6 +346,8 @@ export interface FlowLookupResult {
   outputs: VarField[]
   /** Subflows the version itself references, for recursion and depth checks. */
   subflows?: { flowId: string; version: 'published' | 'draft' }[]
+  /** Absent means `flow`. */
+  kind?: FlowKind
 }
 
 /** Validation context handed to node-level validators. */
@@ -357,7 +376,7 @@ export type IssueCode =
   | 'UNKNOWN_PORT' | 'CROSS_SCOPE_EDGE' | 'CYCLE' | 'BAD_PARENT' | 'UNREACHABLE' | 'END_UNREACHABLE'
   | 'DANGLING_REF' | 'NOT_ANCESTOR' | 'TYPE_MISMATCH' | 'REQUIRED_INPUT' | 'TEMPLATE_UNKNOWN_VAR'
   | 'BAD_REGEX' | 'BAD_LIMIT' | 'SUBFLOW_MISSING' | 'SUBFLOW_RECURSION' | 'SUBFLOW_DEPTH'
-  | 'TOOL_UNKNOWN' | 'SERVICE_UNAVAILABLE' | 'LOOP_BODY_EMPTY'
+  | 'TOOL_UNKNOWN' | 'SERVICE_UNAVAILABLE' | 'LOOP_BODY_EMPTY' | 'GUIDED_UNSUPPORTED'
 
 /** A validation issue. */
 export interface Issue {
@@ -428,6 +447,8 @@ export type RunTrigger =
   | { kind: 'canvas' }
   | { kind: 'tool'; sessionId: string; callId: string }
   | { kind: 'debug'; nodeId: string }
+  /** A guided flow followed by a model; `sessionId` is set once a session picks the run up. */
+  | { kind: 'guided'; sessionId?: string }
 
 /** Lifecycle state of a whole run. */
 export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'

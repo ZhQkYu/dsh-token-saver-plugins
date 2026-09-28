@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import { defineTool, type ParameterSchemaSpec, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import type { FlowDocument, JsonValue, RunSummary, VarField } from '../spec/types.ts'
 import { toParameterSchemaSpec, toValueSchemaSpec } from '../spec/var-schema.ts'
+import { flowInterface, flowKind } from '../spec/guided.ts'
 import type { FlowStore } from './store/flow-store.ts'
 import type { FlowEngine } from './engine/engine.ts'
 
@@ -97,6 +98,10 @@ export class FlowTools {
       timeoutMs: this.engine.timeoutMs(),
       isConcurrencySafe: () => false,
       execute: async (args, exec) => {
+        if (flowKind(flow) === 'guided') {
+          if (exec.agent === undefined) throw new Error(`"${flow.name}" is a guided workflow and needs a calling Agent`)
+          return await this.engine.runGuidedTool(flowId, version, args as JsonValue, exec.agent, exec.signal) as never
+        }
         const { runId } = await this.engine.start({
           flowId,
           version: 'published',
@@ -138,8 +143,13 @@ export class FlowTools {
   }
 }
 
-/** Describe a failed run for a tool error message, naming the failing node. */
-function describeFailure(flow: FlowDocument, summary: RunSummary | undefined): string {
+/**
+ * Describe a failed run for a tool error message, naming the failing node.
+ * @param flow - the flow that ran.
+ * @param summary - the run's final summary.
+ * @returns the message.
+ */
+export function describeFailure(flow: Pick<FlowDocument, 'name' | 'nodes'>, summary: RunSummary | undefined): string {
   if (summary === undefined) return `run of "${flow.name}" has no summary`
   const parts = [`run of "${flow.name}" ${summary.status}`]
   const error = summary.error
@@ -153,16 +163,7 @@ function describeFailure(flow: FlowDocument, summary: RunSummary | undefined): s
 
 /** The tool-facing description of a flow's inputs and outputs. */
 function describeFlow(flow: FlowDocument): { parameters: VarField[]; outputFields: VarField[]; endMode: 'variables' | 'text' } {
-  const start = flow.nodes.find(node => node.type === 'start')
-  const end = flow.nodes.find(node => node.type === 'end')
-  const parameters = start?.type === 'start'
-    ? start.data.fields.map(f => ({ name: f.name, schema: f.schema, required: f.required }))
-    : []
-  if (end?.type === 'end' && end.data.mode === 'text') {
-    return { parameters, outputFields: [], endMode: 'text' }
-  }
-  const outputFields = end?.type === 'end'
-    ? end.data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
-    : []
-  return { parameters, outputFields, endMode: 'variables' }
+  const { inputs, outputs } = flowInterface(flow)
+  const textOnly = outputs.length === 1 && outputs[0]?.name === 'text'
+  return { parameters: inputs, outputFields: textOnly ? [] : outputs, endMode: textOnly ? 'text' : 'variables' }
 }

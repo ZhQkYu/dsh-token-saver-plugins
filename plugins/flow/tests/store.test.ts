@@ -26,6 +26,14 @@ describe('FlowStore', () => {
     expect(s.get(flow.id)?.name).toBe('My flow')
   })
 
+  it('creates a guided flow with a text input and lists its kind', () => {
+    const s = store()
+    const flow = s.create('Guided', '', 'guided')
+    expect(flow.kind).toBe('guided')
+    expect(flow.nodes[0]?.data).toEqual({ fields: [{ name: 'input', schema: { type: 'string' } }] })
+    expect(s.list().find(summary => summary.id === flow.id)?.kind).toBe('guided')
+  })
+
   it('saves with optimistic concurrency', async () => {
     const s = store()
     const flow = s.create('F', '')

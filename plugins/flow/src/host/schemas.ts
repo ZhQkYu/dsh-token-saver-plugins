@@ -8,7 +8,7 @@
 
 import { z } from 'zod'
 import type { VarField, VarSchema } from '../spec/types.ts'
-import { CONDITION_OPS, FLOW_TOOL_NAME_PATTERN, ID_PATTERN, NAME_PATTERN } from '../spec/types.ts'
+import { CONDITION_OPS, FLOW_KINDS, FLOW_TOOL_NAME_PATTERN, ID_PATTERN, NAME_PATTERN } from '../spec/types.ts'
 
 /** Maximum nodes in one flow. */
 export const MAX_NODES = 500
@@ -94,7 +94,7 @@ const nodeSchemas = {
   text: z.strictObject({ ...baseNode, type: z.literal('text'), data: z.union([z.strictObject({ op: z.literal('concat'), inputs: z.array(inputBinding).max(200), template: z.string().max(50000) }), z.strictObject({ op: z.literal('split'), input: valueSource, delimiters: z.array(z.string().max(500)).max(20) })]) }),
   json: z.strictObject({ ...baseNode, type: z.literal('json'), data: z.union([z.strictObject({ op: z.literal('parse'), input: valueSource, outputs: z.array(varField).max(200).optional() }), z.strictObject({ op: z.literal('stringify'), input: valueSource, pretty: z.boolean().optional() })]) }),
   aggregate: z.strictObject({ ...baseNode, type: z.literal('aggregate'), data: z.strictObject({ groups: z.array(z.strictObject({ name, schema: varSchema, candidates: z.array(valueSource).max(200) })).max(200) }) }),
-  loop: z.strictObject({ ...baseNode, type: z.literal('loop'), data: z.strictObject({ mode: z.enum(['array', 'count', 'infinite']), array: valueSource.optional(), count: valueSource.optional(), maxIterations: z.number().int().min(1).max(MAX_SCHEMA_LOOP_ITERATIONS), variables: z.array(z.strictObject({ name, schema: varSchema, initial: valueSource })).max(200), outputs: z.array(z.strictObject({ name, value: valueSource })).max(200) }) }),
+  loop: z.strictObject({ ...baseNode, type: z.literal('loop'), data: z.strictObject({ mode: z.enum(['array', 'count', 'infinite']), array: valueSource.optional(), count: valueSource.optional(), maxIterations: z.number().int().min(1).max(MAX_SCHEMA_LOOP_ITERATIONS), variables: z.array(z.strictObject({ name, schema: varSchema, initial: valueSource })).max(200), outputs: z.array(z.strictObject({ name, value: valueSource })).max(200), until: z.string().max(2000).optional() }) }),
   batch: z.strictObject({ ...baseNode, type: z.literal('batch'), data: z.strictObject({ array: valueSource, concurrency: z.number().int().min(1).max(100), maxItems: z.number().int().min(1).max(1000), outputs: z.array(z.strictObject({ name, value: valueSource })).max(200) }) }),
   break: z.strictObject({ ...baseNode, type: z.literal('break'), data: z.strictObject({}) }),
   continue: z.strictObject({ ...baseNode, type: z.literal('continue'), data: z.strictObject({}) }),
@@ -127,6 +127,7 @@ export const flowDocumentSchema = z.strictObject({
   id,
   name: z.string().min(1).max(200),
   description: z.string().max(MAX_DESCRIPTION_CHARS),
+  kind: z.enum(FLOW_KINDS).optional(),
   nodes: z.array(flowNodeSchema).max(MAX_NODES),
   edges: z.array(flowEdgeSchema).max(MAX_EDGES),
   revision: z.number().int().nonnegative(),
@@ -157,6 +158,7 @@ export const runSummarySchema = z.strictObject({
     z.strictObject({ kind: z.literal('canvas') }),
     z.strictObject({ kind: z.literal('tool'), sessionId: z.string(), callId: z.string() }),
     z.strictObject({ kind: z.literal('debug'), nodeId: id }),
+    z.strictObject({ kind: z.literal('guided'), sessionId: z.string().optional() }),
   ]),
   status: z.enum(['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'interrupted']),
   inputs: z.json(),
@@ -172,7 +174,7 @@ export const runSummarySchema = z.strictObject({
 })
 
 /** Route body schemas. */
-export const createFlowSchema = z.strictObject({ name: z.string().min(1).max(200), description: z.string().max(MAX_DESCRIPTION_CHARS).optional() })
+export const createFlowSchema = z.strictObject({ name: z.string().min(1).max(200), description: z.string().max(MAX_DESCRIPTION_CHARS).optional(), kind: z.enum(FLOW_KINDS).optional() })
 export const saveFlowSchema = z.strictObject({ flow: flowDocumentSchema, baseRevision: z.number().int().nonnegative() })
 export const idRequestSchema = z.strictObject({ id })
 export const duplicateFlowSchema = z.strictObject({ id })

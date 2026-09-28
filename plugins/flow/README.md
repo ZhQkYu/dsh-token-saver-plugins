@@ -1,6 +1,11 @@
 # @dsh-plugins/flow
 
-A Coze-style **deterministic workflow engine** for DeepSeek Harness. A flow is a typed graph: `start` → nodes → `end`. Nodes exchange **typed variables** through named input bindings; the engine, not a model, decides what runs next, so branches, loops, batches, and subflows behave the same way every time.
+A Coze-style **workflow engine** for DeepSeek Harness. A flow is a graph: `start` → nodes → `end`. Each flow has one of two kinds (`kind`):
+
+| Kind | Who runs it | Use for |
+|---|---|---|
+| `flow` (default) | The engine. Nodes exchange **typed variables** through named input bindings, and the engine decides what runs next, so branches, loops, batches, and subflows behave the same way every time. | Fixed pipelines |
+| `guided` | A model. The engine compiles the graph into a numbered step list that a model follows and reports on step by step (see [Guided flows](#guided-flows)). | Tasks that need judgment, such as research or writing |
 
 The browser editor lives in [`@dsh-plugins/flow-ui`](../flow-ui/README.md).
 
@@ -62,6 +67,26 @@ Error policy (`onError`) per node: `fail` (default), `default` (use `defaultOutp
 - **Events.** `run.events` streams NDJSON: persisted events after `after`, then live events, a `ping` every 15 s, and closes after `run.finished`. Only `node.delta` is coalesced under backpressure. Event values are redacted (keys like `authorization`, `cookie`, `token`, `secret`, `password`) and truncated to `recordValueChars`; downstream nodes always receive the full values.
 - **Workspace.** Canvas and debug runs use the `workspaceId` from the request. A flow called as a tool runs in the calling session's working directory. Code nodes and the lazily created run session use that directory.
 
+## Guided flows
+
+A guided flow allows `start`, `end`, `agent` (a step), `tool`, `condition`, `loop`, `break`, `continue`, `subflow`, `question`, `message`, and `comment`; other node types fail validation with `GUIDED_UNSUPPORTED`. The engine checks the graph (links, ports, loop nesting) but not variable types, because the model supplies the values.
+
+- **Steps.** Each node except `start` and `comment` becomes a numbered step; loop bodies are numbered under their loop (`3.1`, `3.2`). A step on a branch carries the gate `Only if step N chose "X"`. A condition's description is the question the model answers; its branch labels are the choices. A loop repeats its body once per item, a count of times, or up to `maxIterations`, and stops early once its `until` text holds. The `end` node's `text` template states the required result; its bindings declare structured result fields.
+- **Runs.** A guided run records the same `node.started` / `node.finished` events as a deterministic run, so the editor shows its progress on the canvas. A run started from the editor opens a new session (with `runAgentPreset` / `runPermissionPreset`) that follows the flow. A run fails with `RUN_TIMEOUT` when it is not finished within `maxRunDurationMs`. Guided runs live in the Host process; a restart marks them `interrupted`.
+- **Inside other flows.** A published guided flow can be a `subflow` step of a deterministic or guided flow, and can be published as a `flow_<name>` tool. In both cases one child Agent (`subagents`) follows the whole step list and returns the result.
+
+## The `flow_workflow` tool
+
+The plugin always registers one tool, `flow_workflow`, whose definition does not change when flows are added or removed, so it does not invalidate the prompt cache:
+
+| `action` | Does |
+|---|---|
+| `list` | Lists flows with their kind, version, and inputs |
+| `run` | Runs a deterministic flow (latest published version, or the draft if never published) with the caller's Agent and returns its outputs |
+| `start` | Starts a guided run in the current conversation and returns the step list; the model then does the steps itself |
+| `report` | Reports one guided step (`nodeId`, `status` `running`/`done`/`skipped`/`failed`, `summary`, chosen `branch`, and `outputs` for the `end` step) and returns what is left |
+| `status` | Returns a guided run's progress |
+
 ## Workflows as tools
 
 Publishing with "offer as a tool" registers `flow_<name>` (`name` matches `^[a-z][a-z0-9_]{0,40}$`; the prefix is `tools.prefix`). The tool runs the latest published snapshot with the caller's Agent, so approvals and PTC presentation flow through the caller; cancelling the tool call cancels the run; a failed run fails the tool call with the failing node and error code. Republishing refreshes the tool's schema; publishing with the tool turned off removes it; a taken name is rejected with `409 TOOL_NAME_TAKEN`.
@@ -116,10 +141,11 @@ Unreadable drafts are listed as broken with the reason instead of being hidden. 
 
 - A `question` wait lives in the Host process; a restart marks the run `interrupted`.
 - Code nodes in `read-only` mode on Windows may hit a Win32 ACL error; grant the workspace directory full control with `icacls`.
-- Registering flow tools changes the main Agent's tool list, which invalidates the prompt cache.
+- Registering `flow_<name>` tools changes the main Agent's tool list, which invalidates the prompt cache; `flow_workflow` alone does not.
+- A guided flow is followed by a model, so its steps and results can differ between runs.
 - LLM JSON output relies on prompt instructions plus one repair attempt; there is no native JSON-schema mode.
 - LLM calls made by flow nodes are recorded in the run events, not in a DSH session log; `agent` and `tool` nodes are logged natively.
-- Tool names are checked against global tools and the tools visible to live root Agents (`catalog.tools` lists the same set); unknown names are warnings, because preset tools without an open session are not visible.
+- Tool names are checked against global tools, the tools of the deployment's default Agent preset, and the tools visible to live root Agents (`catalog.tools` lists the same set); unknown names are warnings.
 
 ## DSH surface
 
@@ -130,6 +156,6 @@ Unreadable drafts are listed as broken with the reason instead of being hidden. 
 | `host/executors/code.ts` | `ptcRuntime.resolve/run` |
 | `host/executors/agent.ts` | `subagents.start`, `SubagentRun.dispose` |
 | `host/services/run-agent.ts`, `session-launch.ts` | `agents.create`, `agentPresets.resolve/acquireScope/mount`, `workspaceRegistry.create/archiveSession`, `permissionPresets`, `sessionTitle.rename` |
-| `host/flow-tools.ts` | `defineTool`, `ctx.tools.register/get` |
+| `host/flow-tools.ts`, `workflow-tool.ts` | `defineTool`, `ctx.tools.register/get` |
 | `host/routes/*` | `ctx.connection.fetch.register`, `ctx.llm.listProviders/listModels`, `ctx.workspaceRegistry.list` |
-| `host/known-tools.ts` | `ctx.tools.schemas(scope?)`, `ctx.agents.roots` |
+| `host/known-tools.ts` | `ctx.tools.schemas(scope?)`, `ctx.agents.roots`, `agentPresets.acquireScope` |

@@ -18,9 +18,10 @@ import { randomUUID } from 'node:crypto'
 import type { AnswerSpec, FlowDocument, FlowLookup, FlowNode, FrameStep, InputBinding, Issue, JsonValue, RunEvent, RunSummary, VarField } from '../../spec/types.ts'
 import { ID_PATTERN, RUN_EVENTS_PING_MS } from '../../spec/types.ts'
 import { coerce } from '../../spec/coerce.ts'
-import { iterBindings, iterTemplates } from '../../spec/validate.ts'
+import { iterBindings, iterTemplates, validateFlow } from '../../spec/validate.ts'
 import { specOf } from '../../spec/nodes/index.ts'
 import { templateVariables } from '../../spec/template.ts'
+import { FLOW_WORKFLOW_TOOL, flowInterface, flowKind, guidedPrompt } from '../../spec/guided.ts'
 import { compile, FlowValidationError, type ExecutionPlan } from './compile.ts'
 import { classifyRunAbort, runFlow, runContainerFrame, runScopeFrame, RunAbort, Semaphore, type RunContext, type RunEmitter, type RunResult } from './scheduler.ts'
 import { RunBudget, NodeError } from './budget.ts'
@@ -33,8 +34,12 @@ import type { RunStore } from '../store/run-store.ts'
 import { RunAgentManager } from '../services/run-agent.ts'
 import { createGuardedFetch } from '../services/guarded-fetch.ts'
 import { validateLimitsOf, type FlowLimits } from '../limits.ts'
-import { knownToolSchemas } from '../known-tools.ts'
+import type { ToolCatalog } from '../known-tools.ts'
 import { recordValue } from './record.ts'
+import { GuidedRuns, type GuidedProgress, type GuidedReportStatus } from './guided-runs.ts'
+import { delegate } from '../executors/delegate.ts'
+import { launchSession } from '../session-launch.ts'
+import { flowSource } from '../message-source.ts'
 
 /** Engine configuration drawn from the resolved limits. */
 export interface EngineConfig extends FlowLimits {
@@ -55,7 +60,7 @@ export class InputValidationError extends Error {
 
 /** Thrown when a run cannot start for a reason other than flow validation (missing flow, workspace, node). */
 export class RunStartError extends Error {
-  constructor(readonly code: 'FLOW_NOT_FOUND' | 'WORKSPACE_NOT_FOUND' | 'NODE_NOT_FOUND' | 'DEBUG_UNSUPPORTED', message: string, readonly status: 400 | 404 = 400) {
+  constructor(readonly code: 'FLOW_NOT_FOUND' | 'WORKSPACE_NOT_FOUND' | 'NODE_NOT_FOUND' | 'DEBUG_UNSUPPORTED' | 'GUIDED_FLOW' | 'NOT_GUIDED', message: string, readonly status: 400 | 404 = 400) {
     super(message)
     this.name = 'RunStartError'
   }
@@ -168,18 +173,30 @@ export class FlowEngine {
   private readonly live = new Map<string, LiveRun>()
   private readonly executors = buildExecutors()
   private readonly interactions = new Map<string, CanvasInteraction>()
+  private readonly guided: GuidedRuns
 
   constructor(
     private readonly ctx: Context,
     private readonly flowStore: FlowStore,
     private readonly runStore: RunStore,
     private readonly config: EngineConfig,
-  ) {}
+    private readonly toolCatalog?: Pick<ToolCatalog, 'names'>,
+  ) {
+    this.guided = new GuidedRuns({
+      runStore,
+      eventHub: this.eventHub,
+      emitterFor: summary => this.buildEmitter(summary),
+      maxRunDurationMs: config.maxRunDurationMs,
+      flowName: id => this.flowName(id),
+      warn: message => { ctx.logger.warn(message) },
+    })
+  }
 
   /**
    * Start a run. Every precondition is checked synchronously before the run
    * exists: a failure throws ({@link FlowValidationError}, {@link InputValidationError},
-   * {@link RunStartError}) and nothing is written.
+   * {@link RunStartError}) and nothing is written. A guided flow started from the
+   * canvas runs in a new session instead of the engine.
    */
   async start(request: {
     flowId: string
@@ -188,9 +205,13 @@ export class FlowEngine {
     workspaceId?: string
     workspacePath?: string
     caller?: { agent: Agent; parent: ToolExecutionToken; rootCallId: ToolCallId; callId: string }
-  }): Promise<{ runId: string }> {
+  }): Promise<{ runId: string; sessionId?: string }> {
     const doc = this.resolveFlow(request.flowId, request.version)
     if (doc === undefined) throw new RunStartError('FLOW_NOT_FOUND', `flow ${request.flowId} (${String(request.version)}) not found`, 404)
+    if (flowKind(doc) === 'guided') {
+      if (request.caller !== undefined || request.workspaceId === undefined) throw new RunStartError('GUIDED_FLOW', `"${doc.name}" is a guided workflow; start it with ${FLOW_WORKFLOW_TOOL} action "start"`)
+      return await this.launchGuided(doc, request.version === 'draft' ? 'draft' : this.flowStore.latestPublishedVersion(doc.id) ?? 'draft', request.inputs, request.workspaceId)
+    }
     const plan = compile(doc, this.flowStore.lookup, this.validateLimits())
     this.checkServiceAvailability(doc, request.caller !== undefined)
     const workspacePath = this.resolveWorkspace(request.workspaceId, request.workspacePath)
@@ -220,11 +241,15 @@ export class FlowEngine {
 
   /** Whether a run exists (live or persisted). */
   hasRun(runId: string): boolean {
-    return ID_PATTERN.test(runId) && (this.live.has(runId) || this.runStore.get(runId) !== undefined)
+    return ID_PATTERN.test(runId) && (this.live.has(runId) || this.guided.has(runId) || this.runStore.get(runId) !== undefined)
   }
 
   /** Cancel a live run. */
   async cancel(runId: string): Promise<boolean> {
+    if (this.guided.has(runId)) {
+      this.guided.finish(runId, 'cancelled')
+      return true
+    }
     const live = this.live.get(runId)
     if (live === undefined) return false
     live.controller.abort(new RunAbort('user'))
@@ -233,6 +258,7 @@ export class FlowEngine {
 
   /** Cancel every live run of a flow (used before deleting it). */
   async cancelFlow(flowId: string): Promise<void> {
+    this.guided.cancelFlow(flowId)
     const runs = [...this.live.values()].filter(run => run.flowId === flowId)
     for (const run of runs) run.controller.abort(new RunAbort('user'))
     await Promise.all(runs.map(run => run.done.catch(() => undefined)))
@@ -331,7 +357,7 @@ export class FlowEngine {
         for (const event of live.sort((a, b) => a.seq - b.seq)) write(event)
         if (!closed) enqueue({ type: 'ping' })
         // A finished run has nothing more to send once its persisted events are replayed.
-        if (!this.live.has(runId)) close()
+        if (!this.live.has(runId) && !this.guided.has(runId)) close()
       },
       pull: () => { onPull() },
       cancel: () => { teardown() },
@@ -412,6 +438,116 @@ export class FlowEngine {
     for (const interaction of this.interactions.values()) interaction.dispose()
     this.interactions.clear()
     for (const runId of this.live.keys()) this.eventHub.close(runId)
+    this.guided.dispose()
+  }
+
+  /**
+   * Start (or pick up) a guided run for a model to follow.
+   * @param request.flowId - the guided flow.
+   * @param request.version - the version to follow; `published` falls back to the draft for a never-published flow.
+   * @param request.inputs - the start inputs.
+   * @param request.runId - a run created for this session by the canvas, to pick up instead of starting one.
+   * @param request.sessionId - the following session.
+   * @param request.workspacePath - the session's working directory.
+   * @returns the run id and the step list to follow.
+   */
+  startGuided(request: { flowId: string; version: number | 'draft' | 'published'; inputs: JsonValue; runId?: string; sessionId?: string; workspacePath?: string }): { runId: string; prompt: string } {
+    if (request.runId !== undefined) {
+      const pending = this.guided.get(request.runId)
+      if (pending === undefined || pending.doc.id !== request.flowId) throw new RunStartError('FLOW_NOT_FOUND', `guided run ${request.runId} of flow ${request.flowId} is not active`, 404)
+      if (request.sessionId !== undefined) this.guided.attach(request.runId, request.sessionId)
+      return { runId: request.runId, prompt: guidedPrompt(pending.doc, 'conversation', inputRecord(pending.summary.inputs), { flowName: id => this.flowName(id) }, request.runId) }
+    }
+    const version = request.version === 'published' ? this.flowStore.latestPublishedVersion(request.flowId) ?? 'draft' : request.version
+    const doc = this.resolveFlow(request.flowId, version)
+    if (doc === undefined) throw new RunStartError('FLOW_NOT_FOUND', `flow ${request.flowId} (${String(version)}) not found`, 404)
+    if (flowKind(doc) !== 'guided') throw new RunStartError('NOT_GUIDED', `"${doc.name}" is not a guided workflow; run it with ${FLOW_WORKFLOW_TOOL} action "run"`)
+    this.assertValid(doc)
+    const inputs = validateStartInputs(doc, request.inputs, this.config.maxValueBytes)
+    const summary = this.guided.create(doc, version, inputs, request.sessionId, request.workspacePath)
+    return { runId: summary.runId, prompt: guidedPrompt(doc, 'conversation', inputs, { flowName: id => this.flowName(id) }, summary.runId) }
+  }
+
+  /**
+   * Apply a step report from the model following a guided run.
+   * @returns the run's progress.
+   */
+  reportGuided(runId: string, nodeId: string, status: GuidedReportStatus, summary?: string, branch?: string, outputs?: JsonValue): GuidedProgress {
+    return this.guided.report(runId, nodeId, status, summary, branch, outputs)
+  }
+
+  /**
+   * A guided run's progress.
+   * @returns the progress, or undefined for an unknown run.
+   */
+  guidedProgress(runId: string): GuidedProgress | undefined {
+    return ID_PATTERN.test(runId) ? this.guided.progress(runId) : undefined
+  }
+
+  /**
+   * Run a guided flow as one delegated agent task (a guided subflow, or a published guided flow tool).
+   * @param doc - the guided flow version.
+   * @param inputs - validated start inputs.
+   * @param parent - the Agent the child agent is parented to.
+   * @param signal - cancels the child.
+   * @returns the flow's outputs: `text`, or its result fields.
+   */
+  async delegateGuided(doc: FlowDocument, inputs: Record<string, JsonValue>, parent: Agent, signal: AbortSignal): Promise<Record<string, JsonValue>> {
+    const subagents: FlowServices['subagents'] = this.ctx.get('subagents')
+    if (subagents === undefined) throw new NodeError('SERVICE_UNAVAILABLE', 'a guided subflow requires the subagents service')
+    const { outputs } = flowInterface(doc)
+    const structured = !(outputs.length === 1 && outputs[0]?.name === 'text')
+    return await delegate(subagents, {
+      provider: this.config.agent.provider,
+      label: doc.name,
+      prompt: guidedPrompt(doc, 'agent', inputs, { flowName: id => this.flowName(id) }),
+      parent,
+      signal,
+      ...(structured ? { fields: outputs } : {}),
+    })
+  }
+
+  /**
+   * Run a published guided flow for a tool call: validate inputs, then delegate it to a child of the caller.
+   * @returns the flow's outputs.
+   */
+  async runGuidedTool(flowId: string, version: number, rawInputs: JsonValue, parent: Agent, signal: AbortSignal): Promise<Record<string, JsonValue>> {
+    const doc = this.resolveFlow(flowId, version)
+    if (doc === undefined) throw new RunStartError('FLOW_NOT_FOUND', `flow ${flowId} (${version}) not found`, 404)
+    this.assertValid(doc)
+    return await this.delegateGuided(doc, validateStartInputs(doc, rawInputs, this.config.maxValueBytes), parent, signal)
+  }
+
+  /** Create a guided run and a session that follows it (the canvas "run" for guided flows). */
+  private async launchGuided(doc: FlowDocument, version: number | 'draft', rawInputs: JsonValue, workspaceId: string): Promise<{ runId: string; sessionId: string }> {
+    this.assertValid(doc)
+    const workspacePath = this.resolveWorkspace(workspaceId, undefined)
+    const inputs = validateStartInputs(doc, rawInputs, this.config.maxValueBytes)
+    const summary = this.guided.create(doc, version, inputs, undefined, workspacePath)
+    try {
+      const launched = await launchSession(this.ctx, {
+        cwd: workspacePath,
+        title: `[Flow] ${doc.name}`,
+        prompt: `Run the guided workflow "${doc.name}": call ${FLOW_WORKFLOW_TOOL} with action "start", flowId "${doc.id}", and runId "${summary.runId}", then follow the steps it returns.`,
+        source: flowSource('guided', `Run guided workflow ${doc.name}`),
+        ...(this.config.runAgentPreset === undefined ? {} : { agentPreset: this.config.runAgentPreset }),
+        ...(this.config.runPermissionPreset === undefined ? {} : { permissionPreset: this.config.runPermissionPreset }),
+      })
+      this.guided.attach(summary.runId, launched.sessionId)
+      return { runId: summary.runId, sessionId: launched.sessionId }
+    } catch (error: unknown) {
+      this.guided.finish(summary.runId, 'failed', undefined, { code: 'SESSION_LAUNCH_FAILED', message: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
+  }
+
+  private assertValid(doc: FlowDocument): void {
+    const errors = validateFlow(doc, this.flowStore.lookup, this.validateLimits()).filter(issue => issue.severity === 'error')
+    if (errors.length > 0) throw new FlowValidationError(errors)
+  }
+
+  private flowName(flowId: string): string | undefined {
+    return ID_PATTERN.test(flowId) ? this.flowStore.get(flowId)?.name : undefined
   }
 
   private createLive(summary: RunSummary, workspacePath: string, flowName: string): LiveRun {
@@ -574,6 +710,12 @@ export class FlowEngine {
         if (flowStack.length > this.config.maxNestingDepth) throw new NodeError('SUBFLOW_DEPTH', `subflow nesting exceeds ${this.config.maxNestingDepth}`)
         const subDoc = this.resolveFlow(flowId, version)
         if (subDoc === undefined) throw new NodeError('SUBFLOW_MISSING', `subflow ${flowId} (${String(version)}) not found`)
+        if (flowKind(subDoc) === 'guided') {
+          const subInputs = coerceFieldsOrThrow(startFields(subDoc), inputs, 'INPUT_TYPE')
+          const binding = await live.agentManager.binding()
+          live.budget.consumeAgentNode()
+          return await this.delegateGuided(subDoc, subInputs, binding.agent, signal)
+        }
         // Cached per run only: a draft or republished subflow must be re-read by the next run.
         const key = `${flowId}@${String(version)}`
         let subPlan = subflowPlans.get(key)
@@ -654,8 +796,8 @@ export class FlowEngine {
   }
 
   private validateLimits(): ReturnType<typeof validateLimitsOf> {
-    // Scoped (preset/agent) tools are absent from the global schema list, so an unknown tool stays a warning.
-    return { ...validateLimitsOf(this.config), toolNames: new Set(knownToolSchemas(this.ctx).map(tool => tool.name)), strictTools: false }
+    // Tools of presets without a live Agent may be missing from the catalog, so an unknown tool stays a warning.
+    return { ...validateLimitsOf(this.config), toolNames: this.toolCatalog?.names() ?? new Set(this.ctx.tools.schemas().map(tool => tool.name)), strictTools: false }
   }
 
   private resolveWorkspace(workspaceId: string | undefined, workspacePath: string | undefined): string {
@@ -676,6 +818,7 @@ export class FlowEngine {
     for (const node of doc.nodes) {
       if (node.type === 'code' && this.ctx.get('ptcRuntime') === undefined) missing(node, 'ptcRuntime')
       if (node.type === 'agent' && this.ctx.get('subagents') === undefined) missing(node, 'subagents')
+      if (node.type === 'subflow' && this.ctx.get('subagents') === undefined && this.flowStore.lookup(node.data.flowId, node.data.version)?.kind === 'guided') missing(node, 'subagents')
       if (node.type === 'question' && sessionQuestions && this.ctx.get('userQuestions') === undefined) missing(node, 'userQuestions')
     }
     if (issues.length > 0) throw new FlowValidationError(issues)
@@ -758,6 +901,11 @@ function recordRendered(rendered: { system?: string; prompt?: string }, maxChars
 function startFields(doc: FlowDocument): (VarField & { default?: JsonValue })[] {
   const start = doc.nodes.find(node => node.type === 'start')
   return start?.type === 'start' ? start.data.fields : []
+}
+
+/** A stored run's inputs as a record. */
+function inputRecord(inputs: JsonValue): Record<string, JsonValue> {
+  return inputs !== null && typeof inputs === 'object' && !Array.isArray(inputs) ? inputs : {}
 }
 
 /** Coerce values against start fields, applying defaults; optional fields without a value become null. */

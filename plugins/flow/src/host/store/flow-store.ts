@@ -9,8 +9,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { FlowDocument, FlowLookup, VarField } from '../../spec/types.ts'
+import type { FlowDocument, FlowKind, FlowLookup } from '../../spec/types.ts'
 import { ID_PATTERN } from '../../spec/types.ts'
+import { flowInterface, flowKind } from '../../spec/guided.ts'
 import { flowDocumentSchema, flowMetaSchema, versionMetaSchema } from '../schemas.ts'
 import { FileLock, writeAtomic } from './atomic.ts'
 
@@ -33,6 +34,7 @@ export interface FlowSummary {
   id: string
   name: string
   description: string
+  kind: FlowKind
   updatedAt: number
   publishedVersion?: number
   toolName?: string
@@ -91,7 +93,7 @@ export class FlowStore {
       const read = this.readFlowFile(path.join(this.flowsDir, name))
       const meta = this.getMeta(flowId)
       if (!read.ok) {
-        out.push({ id: flowId, name: flowId, description: '', updatedAt: 0, nodeCount: 0, broken: true, reason: read.reason })
+        out.push({ id: flowId, name: flowId, description: '', kind: 'flow', updatedAt: 0, nodeCount: 0, broken: true, reason: read.reason })
         continue
       }
       const doc = read.doc
@@ -99,6 +101,7 @@ export class FlowStore {
         id: doc.id,
         name: doc.name,
         description: doc.description,
+        kind: flowKind(doc),
         updatedAt: doc.updatedAt,
         nodeCount: doc.nodes.length,
         ...(meta?.publishedVersion === undefined ? {} : { publishedVersion: meta.publishedVersion }),
@@ -146,8 +149,8 @@ export class FlowStore {
     writeAtomic(path.join(this.flowsDir, `${id}.meta.json`), JSON.stringify(meta))
   }
 
-  /** Create a new flow with a default start -> end graph. */
-  create(name: string, description: string): FlowDocument {
+  /** Create a new flow with a default start -> end graph; a guided flow starts with one free-text input. */
+  create(name: string, description: string, kind: FlowKind = 'flow'): FlowDocument {
     const id = `flow-${randomUUID().slice(0, 12)}`
     const now = Date.now()
     const doc: FlowDocument = {
@@ -155,8 +158,9 @@ export class FlowStore {
       id,
       name,
       description,
+      ...(kind === 'guided' ? { kind } : {}),
       nodes: [
-        { id: `${id}-start`, type: 'start', title: 'Start', position: { x: 0, y: 0 }, data: { fields: [] } },
+        { id: `${id}-start`, type: 'start', title: 'Start', position: { x: 0, y: 0 }, data: { fields: kind === 'guided' ? [{ name: 'input', schema: { type: 'string' } }] : [] } },
         { id: `${id}-end`, type: 'end', title: 'End', position: { x: 300, y: 0 }, data: { mode: 'variables', inputs: [] } },
       ],
       edges: [
@@ -319,26 +323,8 @@ export class FlowStore {
       doc = this.version(flowId, version)
     }
     if (doc === undefined) return undefined
-    return { inputs: startInputs(doc), outputs: endOutputs(doc), subflows: subflowRefs(doc) }
+    return { ...flowInterface(doc), subflows: subflowRefs(doc), ...(doc.kind === undefined ? {} : { kind: doc.kind }) }
   }
-}
-
-/** The start node's input fields. */
-function startInputs(doc: FlowDocument): VarField[] {
-  const start = doc.nodes.find(node => node.type === 'start')
-  return start?.type === 'start'
-    ? start.data.fields.map(f => ({ name: f.name, schema: f.schema, ...(f.required === undefined ? {} : { required: f.required }) }))
-    : []
-}
-
-/** The end node's output fields. */
-function endOutputs(doc: FlowDocument): VarField[] {
-  const end = doc.nodes.find(node => node.type === 'end')
-  if (end?.type === 'end') {
-    if (end.data.mode === 'text') return [{ name: 'text', schema: { type: 'string' } }]
-    return end.data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
-  }
-  return []
 }
 
 /** The subflows a document references directly. */

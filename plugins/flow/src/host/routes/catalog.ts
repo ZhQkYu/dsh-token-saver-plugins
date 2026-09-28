@@ -11,15 +11,15 @@ import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-workspace'
-import type { FlowDocument, VarField } from '../../spec/types.ts'
 import { ROUTES } from '../../spec/types.ts'
 import type { ValidateLimits } from '../../spec/validate.ts'
 import { json, errorResponse } from '../http.ts'
 import type { FlowStore } from '../store/flow-store.ts'
-import { knownToolSchemas } from '../known-tools.ts'
+import type { ToolCatalog } from '../known-tools.ts'
+import { FLOW_WORKFLOW_TOOL } from '../../spec/guided.ts'
 
 /** Register the catalog routes. */
-export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix: string, limits: ValidateLimits): void {
+export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix: string, limits: ValidateLimits, toolCatalog: ToolCatalog): void {
   ctx.connection.fetch.register({
     path: ROUTES.catalogLimits,
     methods: ['GET'],
@@ -46,7 +46,8 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix
     requestBody: 'buffered',
     fetch: async () => {
       try {
-        const visible = knownToolSchemas(ctx).filter(tool => tool.name !== 'run_code' && !tool.name.startsWith(toolPrefix))
+        await toolCatalog.refresh()
+        const visible = toolCatalog.schemas().filter(tool => tool.name !== 'run_code' && tool.name !== FLOW_WORKFLOW_TOOL && !tool.name.startsWith(toolPrefix))
         return json({ tools: visible.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) })
       } catch (error: unknown) {
         return errorResponse(error, 500)
@@ -60,16 +61,14 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix
     requestBody: 'buffered',
     fetch: () => {
       const flows = store.list().map(summary => {
-        const draft = store.get(summary.id)
-        const published = summary.publishedVersion === undefined ? undefined : store.version(summary.id, summary.publishedVersion)
-        const io = (doc: ReturnType<FlowStore['get']> | undefined) => doc === undefined
-          ? { inputs: [], outputs: [], subflows: [] }
-          : { inputs: startInputs(doc), outputs: endOutputs(doc), subflows: subflowRefs(doc) }
+        const empty = { inputs: [], outputs: [], subflows: [] }
+        const published = summary.publishedVersion === undefined ? undefined : store.lookup(summary.id, summary.publishedVersion)
         return {
           id: summary.id,
           name: summary.name,
-          ...(summary.publishedVersion === undefined ? {} : { published: { version: summary.publishedVersion, ...io(published) } }),
-          draft: io(draft),
+          kind: summary.kind,
+          ...(summary.publishedVersion === undefined ? {} : { published: { version: summary.publishedVersion, ...(published ?? empty) } }),
+          draft: store.lookup(summary.id, 'draft') ?? empty,
         }
       })
       return Promise.resolve(json({ flows }))
@@ -106,22 +105,4 @@ async function buildModelCatalog(ctx: Context): Promise<{ default: { provider: s
     }
   }
   return { default: { provider: defaultSelection.provider, model: defaultSelection.model }, groups, failures }
-}
-
-function startInputs(doc: FlowDocument): VarField[] {
-  const start = doc.nodes.find(node => node.type === 'start')
-  return start?.type === 'start' ? start.data.fields.map(f => ({ name: f.name, schema: f.schema, required: f.required })) : []
-}
-
-function endOutputs(doc: FlowDocument): VarField[] {
-  const end = doc.nodes.find(node => node.type === 'end')
-  if (end?.type === 'end') {
-    if (end.data.mode === 'text') return [{ name: 'text', schema: { type: 'string' } }]
-    return end.data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
-  }
-  return []
-}
-
-function subflowRefs(doc: FlowDocument): { flowId: string; version: 'published' | 'draft' }[] {
-  return doc.nodes.flatMap(node => node.type === 'subflow' && node.data.flowId !== '' ? [{ flowId: node.data.flowId, version: node.data.version }] : [])
 }

@@ -1,25 +1,52 @@
 /**
- * The tool names flows can call, for the editor's tool picker and validation.
+ * The tools flows can call, for the editor's tool picker and `TOOL_UNKNOWN`
+ * validation: global tools, the run preset's tools (read through a scope lease
+ * without creating an Agent), and tools visible to live root Agents.
  *
  * @module @dsh-plugins/flow/host/known-tools
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-tools'
 
-/**
- * Tool schemas visible globally or to any live root Agent. Preset-mounted
- * tools (e.g. `read`) exist only in Agent scopes, so the list depends on which
- * sessions are open.
- * @param ctx - the plugin context.
- * @returns one schema per tool name, sorted by name.
- */
-export function knownToolSchemas(ctx: Context): ReturnType<Context['tools']['schemas']> {
-  const byName = new Map<string, ReturnType<Context['tools']['schemas']>[number]>()
-  for (const tool of ctx.tools.schemas()) byName.set(tool.name, tool)
-  for (const agent of ctx.agents.roots()) {
-    for (const tool of ctx.tools.schemas(agent)) if (!byName.has(tool.name)) byName.set(tool.name, tool)
+type ToolSchema = ReturnType<Context['tools']['schemas']>[number]
+
+/** A tool list that combines the global, preset, and live-Agent views. */
+export class ToolCatalog {
+  private presetTools: ToolSchema[] = []
+
+  constructor(private readonly ctx: Context, private readonly preset: string | undefined) {}
+
+  /** Re-read the preset's tools; a failure keeps the previous list and is logged. */
+  async refresh(): Promise<void> {
+    try {
+      await using lease = await this.ctx.agentPresets.acquireScope(this.preset)
+      this.presetTools = this.ctx.tools.schemas(lease.key)
+    } catch (error: unknown) {
+      this.ctx.logger.debug(`flow: preset tool list unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+
+  /**
+   * The known tools, one schema per name.
+   * @returns the schemas sorted by name.
+   */
+  schemas(): ToolSchema[] {
+    const byName = new Map<string, ToolSchema>()
+    const add = (tools: readonly ToolSchema[]): void => { for (const tool of tools) if (!byName.has(tool.name)) byName.set(tool.name, tool) }
+    add(this.ctx.tools.schemas())
+    add(this.presetTools)
+    for (const agent of this.ctx.agents.roots()) add(this.ctx.tools.schemas(agent))
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /**
+   * The known tool names.
+   * @returns the names.
+   */
+  names(): Set<string> {
+    return new Set(this.schemas().map(tool => tool.name))
+  }
 }

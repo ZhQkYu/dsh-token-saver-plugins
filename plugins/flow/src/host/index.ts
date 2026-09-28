@@ -18,8 +18,9 @@ import { FlowStore } from './store/flow-store.ts'
 import { RunStore } from './store/run-store.ts'
 import { registerFlowRoutes } from './routes/flows.ts'
 import { registerCatalogRoutes } from './routes/catalog.ts'
-import { knownToolSchemas } from './known-tools.ts'
+import { ToolCatalog } from './known-tools.ts'
 import { registerRunRoutes } from './routes/runs.ts'
+import { registerWorkflowTool } from './workflow-tool.ts'
 import { LAUNCH_SESSION_SERVICES } from './session-launch.ts'
 import { resolveLimits, validateLimitsOf } from './limits.ts'
 
@@ -49,20 +50,23 @@ export function apply(ctx: Context, config: FlowConfig): void {
     agent: config.agent,
     tools: config.tools,
   }
-  const engine = new FlowEngine(ctx, flowStore, runStore, engineConfig)
+  const toolCatalog = new ToolCatalog(ctx, config.runAgentPreset)
+  void toolCatalog.refresh()
+  const engine = new FlowEngine(ctx, flowStore, runStore, engineConfig, toolCatalog)
   const flowTools = new FlowTools(ctx, flowStore, engine, config.tools.prefix)
 
   registerFlowRoutes(ctx, flowStore, {
     maxFlowBytes: config.maxFlowBytes,
     // Tools of presets without a live Agent stay unknown, so TOOL_UNKNOWN stays a warning.
-    limits: () => ({ ...validateLimitsOf(limits), toolNames: new Set(knownToolSchemas(ctx).map(tool => tool.name)), strictTools: false }),
+    limits: () => ({ ...validateLimitsOf(limits), toolNames: toolCatalog.names(), strictTools: false }),
     isToolNameAvailable: (flowId, name) => flowTools.isNameAvailable(flowId, name),
     beforeDelete: (flowId) => engine.cancelFlow(flowId),
     onPublished: (flowId) => flowTools.sync(flowId),
     onDeleted: (flowId) => flowTools.unregister(flowId),
   })
-  registerCatalogRoutes(ctx, flowStore, config.tools.prefix, validateLimitsOf(limits))
+  registerCatalogRoutes(ctx, flowStore, config.tools.prefix, validateLimitsOf(limits), toolCatalog)
   registerRunRoutes(ctx, runStore, engine)
+  registerWorkflowTool(ctx, flowStore, engine)
   flowTools.sync()
 
   ctx.effect(() => () => { void engine.dispose() }, 'dsh-flow engine teardown')

@@ -9,7 +9,7 @@
  */
 
 /** The flow feature that injects a message. */
-export type FlowFeature = 'run'
+export type FlowFeature = 'run' | 'guided'
 
 /** Attribution for a message originated by the flow plugin. */
 export interface FlowMessageSource {

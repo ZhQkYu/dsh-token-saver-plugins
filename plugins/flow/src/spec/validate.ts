@@ -7,7 +7,8 @@
  */
 
 import type { FlowDocument, FlowEdge, FlowLookup, FlowNode, InputBinding, Issue, IssueCode, VarSchema, ValueSource } from './types.ts'
-import { ID_PATTERN } from './types.ts'
+import { GUIDED_NODE_TYPES, ID_PATTERN } from './types.ts'
+import { flowKind } from './guided.ts'
 import { NODE_SPECS, specOf } from './nodes/index.ts'
 import { buildScopeIndex, containerChainOf, nodeById, nodesInScope, visibleOutputNodes, type ScopeIndex } from './scope.ts'
 import { compatible } from './var-schema.ts'
@@ -72,7 +73,27 @@ export function validateFlow(doc: FlowDocument, lookup: FlowLookup, limits: Vali
   }
   checkReachability(doc, issues)
   checkSubflowGraph(doc, lookup, limits, issues)
-  return issues
+  return flowKind(doc) === 'guided' ? guidedIssues(doc, issues) : issues
+}
+
+/**
+ * Adjust issues for a guided flow: a model follows it, so typed-data checks
+ * (types, placeholder result fields, rule-less branches) do not apply, unknown
+ * template names are only warnings, and engine-only node types are rejected.
+ */
+function guidedIssues(doc: FlowDocument, issues: Issue[]): Issue[] {
+  const out: Issue[] = []
+  for (const issue of issues) {
+    const field = issue.field ?? ''
+    if (issue.code === 'TYPE_MISMATCH') continue
+    if (issue.code === 'REQUIRED_INPUT' && field.endsWith('.value')) continue
+    if (issue.code === 'BAD_NAME' && field.endsWith('.conditions')) continue
+    out.push(issue.code === 'TEMPLATE_UNKNOWN_VAR' ? { ...issue, severity: 'warning' } : issue)
+  }
+  for (const node of doc.nodes) {
+    if (!GUIDED_NODE_TYPES.includes(node.type)) out.push(mk('GUIDED_UNSUPPORTED', `${node.type} nodes need the engine and cannot be part of a guided flow`, { nodeId: node.id }))
+  }
+  return out
 }
 
 function checkNode(node: FlowNode, doc: FlowDocument, lookup: FlowLookup, limits: ValidateLimits, index: ScopeIndex, issues: Issue[]): void {

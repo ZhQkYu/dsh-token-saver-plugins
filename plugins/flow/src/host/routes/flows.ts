@@ -59,7 +59,7 @@ export function registerFlowRoutes(ctx: Context, store: FlowStore, options: Flow
     fetch: async (request) => {
       try {
         const body = await readJsonBody(request, createFlowSchema, options.maxFlowBytes)
-        const flow = store.create(body.name, body.description ?? '')
+        const flow = store.create(body.name, body.description ?? '', body.kind ?? 'flow')
         return json({ flow })
       } catch (error: unknown) {
         return errorResponse(error, 400)

@@ -19,7 +19,7 @@ import { InputValidationError, RunStartError } from '../engine/engine.ts'
 
 /** The run lifecycle the routes delegate to; the engine implements this. */
 export interface RunController {
-  start(request: { flowId: string; version: number | 'draft'; inputs: JsonValue; workspaceId: string }): Promise<{ runId: string }>
+  start(request: { flowId: string; version: number | 'draft'; inputs: JsonValue; workspaceId: string }): Promise<{ runId: string; sessionId?: string }>
   hasRun(runId: string): boolean
   cancel(runId: string): Promise<boolean>
   answer(runId: string, execKey: string, answer: { text?: string; optionId?: string }): Promise<'ok' | 'not-waiting' | 'invalid'>
