@@ -18,8 +18,8 @@
 - [插件 A：tool-gate（工具分组开关）](#插件-a-tool-gate工具分组开关)
 - [插件 B：session-handoff（会话记忆与交接）](#插件-b-session-handoff会话记忆与交接)
 - [插件 C：web-ai-bridge（免费网页 AI 桥）](#插件-c-web-ai-bridge免费网页-ai-桥)
-- [插件 D：workflow-canvas（可视化节点工作流）](#插件-d-workflow-canvas可视化节点工作流)
-- [前端 UI（token-saver-ui）](#前端-uitoken-saver-ui)
+- [插件 D：flow（可视化工作流）](#插件-dflow可视化工作流)
+- [前端 UI（flow-ui）](#前端-uiflow-ui)
 - [安全与约定](#安全与约定)
 - [测试](#测试)
 - [许可](#许可)
@@ -39,7 +39,7 @@
 | 工具开关 | 工具描述占上下文，不用时关掉 | `tool-gate` |
 | 会话记忆 + 接力 | 上下文满了要开新会话，但不能"失忆" | `session-handoff` |
 | 免费 AI 桥 | 琐碎子任务不用付费模型，丢给网页 AI | `web-ai-bridge` |
-| 可视化流程 | 多步任务光靠文字容易跑偏，画成流程图 | `workflow-canvas` |
+| 可视化流程 | 多步任务光靠文字容易跑偏，画成流程图 | `flow` |
 
 它们**不是**给模型加"新玩法"，而是**给模型提供可感知、可操控的工具与上下文**，让模型自己决定何时省 token、何时交接、何时分派。
 
@@ -52,10 +52,9 @@
 | A | `tool-gate` 工具分组开关 | `tool_gate` | （可选）会话级开关面板 | 按需启停工具组，省上下文 |
 | B | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文 | 新会话出现在侧栏 | 记忆文件 + 会话接力，延长生命周期 |
 | C | `web-ai-bridge` 免费网页 AI 桥 | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口 | 把子任务丢给免费网页 AI |
-| D | `workflow-canvas` 可视化节点工作流 | `canvas_workflow` | 侧栏"工作流画布"页面 | 用流程图描述并执行多步任务（引导/严格双引擎） |
-| E | `flow` Coze 风格确定性工作流 | `flow_<name>`（发布为工具） | 侧栏"工作流"页面（`flow-ui`） | 类型化变量 + 数据流 + 控制流的确定性工作流引擎 |
+| D | `flow` 可视化工作流 | `flow_workflow`（+ 可选发布的 `flow_<name>`） | 侧栏"工作流"页面（`flow-ui`） | 确定性流程由引擎执行；引导流程由模型照着做 |
 
-配套前端 bundle：`@dsh-plugins/token-saver-ui`（在 DSH Web 界面渲染"Plugins 页"与"工作流画布页"）；`@dsh-plugins/flow-ui` 渲染 flow 插件的列表页与画布编辑器。
+配套前端 bundle：`@dsh-plugins/flow-ui` 渲染 flow 插件的列表页与画布编辑器。
 
 ---
 
@@ -72,8 +71,8 @@
 
 ## 快速开始
 
-> 本仓库是 **workspace monorepo**，两个可安装的插件包位于 `plugins/` 下：
-> `@dsh-plugins/token-saver`（Host bundle）和 `@dsh-plugins/token-saver-ui`（Client bundle）。
+> 本仓库是 **workspace monorepo**，三个可安装的插件包位于 `plugins/` 下：
+> `@dsh-plugins/token-saver` / `@dsh-plugins/flow`（Host bundle）和 `@dsh-plugins/flow-ui`（Client bundle）。
 > 下面用 `<HARNESS>` 代表你本地 `deepseek-harness` 的路径，用 `<PLUGINS>` 代表本仓库的路径。
 
 ### 1. 构建插件
@@ -92,7 +91,9 @@ pnpm run build          # tsc 输出 lib/ + esbuild 打包 client.js
 ```sh
 cd <HARNESS>
 pnpm dsh plugin --profile web add <PLUGINS>/plugins/token-saver
-pnpm dsh plugin --profile web add <PLUGINS>/plugins/token-saver-ui
+# 可视化工作流（flow）
+pnpm dsh plugin --profile web add <PLUGINS>/plugins/flow
+pnpm dsh plugin --profile web add <PLUGINS>/plugins/flow-ui
 
 # 确认插件层已加载（应看到 "# == @dsh-plugins/token-saver" 层）
 pnpm dsh --profile web --dump-config
@@ -123,7 +124,8 @@ pnpm dsh --profile web add github:ZhQkYu/dsh-plugins
    ```yaml
    allowBuilds:
      token-saver: true
-     token-saver-ui: true
+     flow: true
+     flow-ui: true
    ```
 
    把这项授权视为**允许该包代码在安装时于你的机器上执行**。只对可信源码授权，并建议锁定 commit（`github:ZhQkYu/dsh-plugins#<sha>`）。
@@ -137,7 +139,9 @@ pnpm dsh --profile web add github:ZhQkYu/dsh-plugins
 
 ### 4. 验证
 
-打开 DSH Web（默认 `http://127.0.0.1:3080/`），侧栏应出现 **Plugins** 与 **Workflow Canvas** 两个入口；在 **Plugins** 页可看到 `Token Saver` 与 `Workflow Canvas` 两个已安装的 bundle。
+打开 DSH Web（默认 `http://127.0.0.1:3080/`），侧栏应出现 **Plugins** 与 **工作流** 两个入口；在 **Plugins** 页可看到已安装的插件 bundle（`Token Saver`、`Flow`）。
+
+> 从旧版本升级：Workflow Canvas 已合并进 flow。先执行 `pnpm dsh plugin --profile web remove @dsh-plugins/token-saver-ui`（或在 **Plugins** 页移除该 bundle），再重新构建并重启 DSH。
 
 ---
 
@@ -153,26 +157,39 @@ dsh-plugins/
   plugins/
     token-saver/                   # @dsh-plugins/token-saver（Host bundle）
       package.json
-      cordis.patch.yml             # Host 插件配置（工具分组、记忆、provider、画布）
+      cordis.patch.yml             # Host 插件配置（工具分组、记忆、provider）
       locale/<feature>/{zh,en}.json
       src/
-        shared/                    # session-launch, glob, http, message-source, projection
-        protocol.ts                # Host/Client 共享的纯类型 + 路由常量
+        shared/                    # session-launch, glob, message-source, projection
         tool-gate/                 # index + state + reconcile + groups
         session-handoff/           # index + memory + handoff
         web-ai-bridge/             # index + browser + driver + page
-        workflow-canvas/           # index + store + compile + routes + plan + interpreter + strict-runner + catalog
       scripts/probe-web-ai.mjs     # 网页 AI 选择器探测脚本（开发用）
       tests/*.test.ts
-    token-saver-ui/                # @dsh-plugins/token-saver-ui（Client bundle）
+    flow/                          # @dsh-plugins/flow（Host bundle）
+      package.json
+      cordis.patch.yml             # Host 插件配置（存储、预算、并发、HTTP、code 沙箱、工具前缀）
+      examples/                    # 可导入的示例流（topic-outline / http-check / review-loop / read-summarize-confirm）
+      src/
+        spec/                      # 节点规格、类型、校验、coerce、run-view、guided（Host/Client 共享）
+        host/
+          engine/                  # scheduler + frames + budget + record + events + engine
+          executors/               # 每种节点的执行器（llm / http / code / tool / loop / batch / end …）
+          services/                # guarded-fetch（SSRF）、run-agent
+          store/                   # flow-store / run-store / atomic
+          routes/                  # flows / runs / catalog
+          limits.ts, config.ts, flow-tools.ts, workflow-tool.ts, known-tools.ts, schemas.ts
+      tests/*.test.ts
+    flow-ui/                       # @dsh-plugins/flow-ui（Client bundle）
       package.json
       cordis.patch.yml
       index.js                     # Host 半边
       build.mjs                    # esbuild 打包 + ModuleLoader 包装
       tsconfig.json
-      src/client/index.tsx, CanvasPage.tsx
-      src/client/StepNode.tsx, StepEdge.tsx, Inspector.tsx, ToolPicker.tsx   # 画布编辑器组件
-      src/client/kinds.tsx, graph-ops.ts, actions.ts, api.ts, locales.ts, styles.ts
+      src/client/index.tsx
+      src/client/editor/           # Editor, NodeView, forms, convert, PublishDialog
+      src/client/run/              # RunPanel, run-stream
+      src/client/api.ts, locales.ts, styles.ts, FlowList.tsx, FlowPage.tsx
       lib/client.js                # 构建产物
 ```
 
@@ -301,76 +318,63 @@ deepseek 用的是 `ds-*` 设计系统类名（**不带构建哈希后缀**，�
 
 ---
 
-## 插件 D：workflow-canvas（可视化节点工作流）
+## 插件 D：flow（可视化工作流）
 
-**作用：让 AI 用"画流程图"的方式描述任务，然后用**双引擎**执行。**
+**作用：在画布上画出工作流，有两种类型：**
 
-画布是"给 AI 的方法说明书"：用户用节点 + 连线描述"用什么工具、什么方式、达到什么目标"。每个工作流有两种运行模式：
-
-| 模式 | 运行方式 | 适用场景 |
+| 类型 | 谁执行 | 适合 |
 |---|---|---|
-| `guided`（引导） | 主 Agent 读取编译后的步骤清单，用现有工具逐节点执行、汇报状态 | 流程步骤少、依赖主 Agent 的灵活判断 |
-| `strict`（严格） | 用 `ctx.workflowEngine` 跑一个固定解释器脚本，**模型不驱动流程**，每个步骤一个子 Agent | 流程复杂、需要确定性的控制流（分支/循环/子流程） |
+| 确定性流程（`flow`） | flow 引擎按连线执行，节点之间传类型化变量 | 固定流水线：抓取、解析、分支、批处理 |
+| 引导流程（`guided`） | 模型照着步骤清单做：在对话里执行（`flow_workflow start/report`），或作为另一个流程中的一步（由一个子 Agent 执行） | 调研、写作等需要灵活判断的任务 |
 
-### 节点类型（`src/protocol.ts`）
+确定性流程里，**引擎（而非模型）**决定下一个节点：节点之间通过**命名输入绑定**交换**类型化变量**（字面量或上游节点输出/容器内部变量的引用），因此分支、循环、批处理、子流程每次都走同一条路径。详细的节点表、配置项、安全与存储布局见 [`plugins/flow/README.md`](plugins/flow/README.md)。
 
-10 种节点：`input`、`task`、`web-ai`、`subagent`、`tool`、`review`、`output` 是**执行节点**；`condition`、`loop`、`subflow` 是**控制流节点**。
+### 节点类型
 
-- `condition`（条件分支）：按 `model`（让模型选）或 `rule`（文本规则 `contains`/`equals`/`regex`）决定走哪个分支；每个分支有 `id` + `label`，另有一个 `else` 兜底出口。
-- `loop`（循环）：对某个子工作流循环执行，可设 `maxIterations`（轮数上限）和 `exitRule`（提前退出规则）。
-- `subflow`（子工作流）：引用并运行另一个已保存的工作流，支持嵌套。
+`start`、`end`、`llm`、`intent`、`agent`、`condition`、`code`、`http`、`tool`、`text`、`json`、`aggregate`、`loop`、`batch`、`break`、`continue`、`assign`、`subflow`、`question`、`message`、`comment`。
+
+- **数据**：`text`（拼接/拆分）、`json`（解析/序列化）、`code`（经 `ptcRuntime` 沙箱执行 TypeScript）、`http`（SSRF 防护的请求）。
+- **控制**：`condition`、`aggregate`、`loop`（数组/计数/无限）、`batch`、`break`、`continue`、`assign`、`subflow`。
+- **AI**：`llm`、`intent`、`agent`（子 Agent）。
+- **交互**：`question`（画布或会话）、`message`、`comment`。
+
+每个节点都有 `onError` 策略（`fail` / `default` / `branch`）、`timeoutMs` 与 `retries`（0–5）。
+
+### 运行模型
+
+- **先校验后运行**：`run.start` 先编译校验、检查可选服务（`ptcRuntime`/`subagents`/`userQuestions`）、解析工作区、校验输入，失败直接返回 `400`。
+- **终态唯一**：每次运行恰好一个 `run.finished`（`succeeded` / `failed` / `cancelled`）。
+- **预算为致命错误**：节点数、LLM 调用数、Agent 节点数、总时长一旦超限直接失败，任何 `onError` 都无法吸收。
+- **并发**：独立分支输入就绪即启动；`maxConcurrentNodes` 只约束叶子节点（容器与子流程不占名额）。
+- **事件流**：`run.events` 以 NDJSON 推送，带 15 秒心跳，运行结束后关闭；事件值脱敏并截断，下游节点始终拿到完整值。
 
 ### Config（`cordis.patch.yml`）
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `storageDir` | `~/.dsh/token-saver/canvas` | 存储目录 |
-| `maxGraphBytes` | `262144` | 单图 JSON 上限 |
-| `keepRuns` | `20` | 每图保留最近运行数 |
-| `strictAgentPreset` | （部署默认） | strict 运行 Session 的 agent preset，必须组合出 workflow 引擎 |
-| `maxAgentsPerRun` | `200` | 单次 strict 运行的子 Agent 上限 |
-| `maxNestingDepth` | `4` | loop/subflow 引用的最大嵌套层数 |
-| `maxLoopIterations` | `20` | loop 节点可设置的最高轮数（schema 上限 100） |
-| `maxStepOutputChars` | `6000` | strict 运行时向下游传递的单步输出最长字符数 |
-
-### 数据模型（`src/protocol.ts`）
-
-`CanvasGraph`（`version: 1`，`nodes` ≤ 200、`edges` ≤ 500，必须是 DAG）、`CanvasRun`（节点状态 `pending/running/done/failed/skipped`；strict 运行还有 `state: running/done/failed/cancelled/interrupted`）。校验在服务端强制（`compileGraph` + `buildStrictPlan`）。
-
-### 严格执行引擎
-
-- `plan.ts`：从已保存的图构建 `StrictPlan`，解析 loop/subflow 引用，**拒绝缺失、循环、过深**的引用；在 Host 端渲染每个步骤的 prompt。
-- `interpreter.ts`：固定解释器脚本（`interpreterScript()` 把 `interpretPlan` 源码发给引擎），走 DAG，节点输入 settle 即并行运行；condition 按分支路由，loop/subflow 嵌套；每个模型步骤一次 `agent()` 子调用。
-- `strict-runner.ts`：每个 strict 运行一个 idle 根 Session；监听 `workflow/log` 进度行转成 canvas run 记录；持有 live runs 直到 settle 或插件卸载，可取消。
-- `catalog.ts`：列出会话可见的工具（globals + agent preset），供画布 UI 的工具选择器使用。
-
-### Model Experience
-
-`canvas_workflow` 的 `action`：`list` / `start` / `report` / `status`。
-- **guided**：`start` 返回编号步骤清单 + 规则："按顺序执行；依赖完成后再执行；每个节点开始时 report running，结束时 report done/failed 并附一两句摘要"。
-- **strict**：`start` 由引擎直接跑图，模型不参与流程编排，只完成每个步骤。
+每个可调项都是 `Config` 字段（存储、预算、并发、超时、沙箱模式、工具前缀等），完整表格见 [`plugins/flow/README.md`](plugins/flow/README.md#configuration)。
 
 ### Host 路由
 
-全部走 `ctx.connection.fetch.register`（带 Connection 鉴权围栏 + cookie），路径：
-`/api/token-saver/canvas.graphs`、`canvas.graph`、`canvas.delete`、`canvas.runs`、`canvas.run`、`canvas.cancel`、`canvas.workspaces`、`web-ai.providers`（画布 UI 列 provider 用）。`canvas.run` 用 `launchSession` 在新会话中执行。
+全部走 `ctx.connection.fetch.register`，前缀为 `/api/dsh-flow`：
+
+- **流**：`flows`（列表）、`flow`（读取）、`flow.create`、`flow.save`、`flow.delete`、`flow.duplicate`、`flow.validate`、`flow.publish`、`flow.versions`、`flow.version`、`flow.export`、`flow.import`。
+- **运行**：`run.start`、`run.events`、`run.get`、`run.cancel`、`run.answer`、`runs`、`node.debug`。
+- **目录**：`catalog.models`、`catalog.tools`、`catalog.flows`、`catalog.workspaces`、`catalog.limits`。
+
+对话里通过固定工具 `flow_workflow` 使用所有工作流：`list` 列出、`run` 运行确定性流程、`start` / `report` / `status` 跟随引导流程；工具定义不随流程增减变化，不影响提示词缓存。发布时也可以把某个流程单独注册为 `flow_<name>` 工具；发布后的流程可以被其他流程的子流程节点引用。
 
 ### Known Limitations
 
-- **guided**：执行依赖主模型遵循步骤清单，不是确定性引擎。
-- **strict**：每个步骤一次模型调用，代价较高；引擎运行依赖部署的 workflow 引擎与 `strictAgentPreset`。
-- 运行状态只在 Web 模式可见。
+- `question` 等待只存在于 Host 进程；重启会把运行中的运行标记为 `interrupted`。
+- Windows 上 `read-only` 沙箱的 `code` 节点可能触发 Win32 ACL 错误，需对工作区目录执行 `icacls`。
+- 单独发布的 `flow_<name>` 工具会改变主 Agent 的工具列表，使提示词缓存失效；只用 `flow_workflow` 时不会。
+- 引导流程由模型执行，不保证每次步骤、结果一致。
+- LLM 结构化输出依赖提示词约束加一次修复重试，没有原生 JSON-schema 模式。
 
 ---
 
-## 前端 UI（token-saver-ui）
+## 前端 UI（flow-ui）
 
-`@dsh-plugins/token-saver-ui` 提供 DSH Web 侧栏的两个入口：
-
-- **Plugins 页**：能看到并开关 4 个组件（Tool Gate / Session Handoff / Web AI Bridge / Workflow Canvas）。
-- **Workflow Canvas 页**：左侧工作流列表；顶栏"新建 / 保存 / 选择节点类型 + 添加节点 / 选择工作区 + 运行"；中间画布拖拽节点、从节点边缘拖出连线、选中后按 Backspace/Delete 删除，节点选中时浮出复制/删除工具条；右侧检查器（Inspector）编辑工作流（名称/描述/运行模式）或节点（类型、标题、指令，以及类型专属编辑：condition 的分支 + 规则、loop/subflow 的子工作流引用、web-ai 的 provider、tool 的工具名）。"运行"会先保存，再在所选工作区新建会话执行；执行期间每 2 秒刷新节点状态（执行中/完成/失败/跳过），选中节点可查看执行结果摘要。
-
-画布编辑器使用自定义节点/边渲染（`StepNode.tsx`、`StepEdge.tsx`）：每种节点有专属颜色与图标（`kinds.tsx`），condition 节点右侧按分支伸出多个输出句柄，执行/循环状态以徽标显示。`graph-ops.ts` 提供纯图操作（环检测、分支边整理、自动布局）。
+`@dsh-plugins/flow-ui` 提供侧栏"工作流"页面：工作流列表（新建时选择确定性流程或引导流程）与画布编辑器。编辑器全程点选：从左侧点击节点类型会接在选中节点后面并自动连线，右侧按节点类型给出表单，变量用下拉选择上游结果，不需要写 JSON；引导流程提供"步骤预览"，并可"在新会话中运行"，画布上实时显示每一步的进度。详见 [`plugins/flow-ui/README.md`](plugins/flow-ui/README.md)。
 
 ---
 
@@ -395,7 +399,7 @@ pnpm run test        # vitest run
 pnpm run build       # 产出 lib/ + client.js
 ```
 
-单测覆盖：glob、tool-gate 投影 fold、tool-gate reconcile、memory 路径逃逸/截断、handoff 文件、canvas 编译（拓扑/环/提示/控制流校验）、canvas 存储（保存/删除/修剪/并发写）、web-ai-bridge driver、**strict 严格执行解释器**（并行分支/条件路由/循环/子流程）、**工具目录**（catalog）。
+单测覆盖：glob、tool-gate 投影 fold、tool-gate reconcile、memory 路径逃逸/截断、handoff 文件、web-ai-bridge driver。**flow** 覆盖调度器（信号/预算/并发/取消/超时）、执行器（含 end、loop/batch、condition、aggregate）、存储（run/flow store、原子写、中断恢复）、flow 校验与示例流、引导流程（步骤编译、运行汇报、作为子流程执行）、`flow_workflow` 工具与工具目录；**flow-ui** 覆盖画布转换（convert）、表单辅助与运行事件流（run-stream）。
 
 ---
 
