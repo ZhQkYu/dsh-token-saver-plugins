@@ -1,0 +1,9 @@
+{
+  "panel": "工作流",
+  "empty": "还没有工作流。创建一个开始使用。",
+  "newFlow": "新建工作流",
+  "name": "名称",
+  "description": "描述",
+  "updatedAt": "更新时间",
+  "open": "打开"
+}

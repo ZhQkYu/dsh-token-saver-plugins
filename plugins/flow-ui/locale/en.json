@@ -1,0 +1,9 @@
+{
+  "panel": "Flow",
+  "empty": "No flows yet. Create one to get started.",
+  "newFlow": "New flow",
+  "name": "Name",
+  "description": "Description",
+  "updatedAt": "Updated",
+  "open": "Open"
+}

@@ -28,6 +28,11 @@
     "@deepseek-ai/dsh-client-connection": "link:../deepseek-harness/packages/client/connection",
     "@deepseek-ai/dsh-brand": "link:../deepseek-harness/packages/util/brand",
     "@deepseek-ai/dsh-home-paths": "link:../deepseek-harness/packages/util/home-paths",
-    "@deepseek-ai/dsh-workflow": "link:../deepseek-harness/packages/workflow/workflow"
+    "@deepseek-ai/dsh-workflow": "link:../deepseek-harness/packages/workflow/workflow",
+    "@deepseek-ai/dsh-ptc-runtime": "link:../deepseek-harness/packages/ptc-runtime/ptc-runtime",
+    "@deepseek-ai/dsh-sandbox-policy": "link:../deepseek-harness/packages/sandbox/sandbox-policy",
+    "@deepseek-ai/dsh-sandbox": "link:../deepseek-harness/packages/sandbox/sandbox",
+    "@deepseek-ai/dsh-subagent": "link:../deepseek-harness/packages/subagent/subagent",
+    "@deepseek-ai/dsh-user-questions": "link:../deepseek-harness/packages/interaction/user-questions"
   }
 }

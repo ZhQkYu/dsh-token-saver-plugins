@@ -1,0 +1,37 @@
+# DSH Flow host plugin. Toggle it on the Plugins page.
+- insert:
+    - id: dsh-flow
+      name: '@dsh-plugins/flow'
+      config:
+        # storageDir: ~/.dsh/flow             # 缺省 dshHomePath('flow')
+        maxFlowBytes: 1048576
+        keepRunsPerFlow: 50
+        maxRunEventsBytes: 8388608
+        recordValueChars: 20000
+        maxValueBytes: 4194304
+        # runAgentPreset: standard            # 必须是 native 工具呈现；缺省=部署默认
+        # runPermissionPreset: ...
+        archiveRunSessions: true
+        maxConcurrentNodes: 8
+        maxNodeExecutionsPerRun: 2000
+        maxLlmCallsPerRun: 200
+        maxAgentNodesPerRun: 20
+        maxRunDurationMs: 1800000
+        maxNodeTimeoutMs: 600000
+        maxNestingDepth: 5
+        maxLoopIterations: 1000
+        maxBatchItems: 500
+        maxBatchConcurrency: 10
+        maxRegexInputChars: 100000
+        code:
+          timeoutMs: 30000
+          sandboxMode: read-only
+        http:
+          timeoutMs: 30000
+          maxResponseBytes: 2097152
+          allowPrivateNetwork: false
+          allowedHosts: []
+        agent:
+          provider: spawn
+        tools:
+          prefix: flow_

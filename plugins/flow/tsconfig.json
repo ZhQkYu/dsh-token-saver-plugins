@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    // The flow data model is JSON-shaped: optional fields are genuinely optional
+    // and are frequently built from `undefined` sources. exactOptionalPropertyTypes
+    // would force a conditional spread on every optional field, so it is relaxed
+    // for this package (the token-saver package keeps the base strictness).
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src"]
+}

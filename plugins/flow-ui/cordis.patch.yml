@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-flow-ui
+      name: '@dsh-plugins/flow-ui'

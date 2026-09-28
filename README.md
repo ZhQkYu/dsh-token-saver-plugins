@@ -53,8 +53,9 @@
 | B | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文 | 新会话出现在侧栏 | 记忆文件 + 会话接力，延长生命周期 |
 | C | `web-ai-bridge` 免费网页 AI 桥 | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口 | 把子任务丢给免费网页 AI |
 | D | `workflow-canvas` 可视化节点工作流 | `canvas_workflow` | 侧栏"工作流画布"页面 | 用流程图描述并执行多步任务（引导/严格双引擎） |
+| E | `flow` Coze 风格确定性工作流 | `flow_<name>`（发布为工具） | 侧栏"工作流"页面（`flow-ui`） | 类型化变量 + 数据流 + 控制流的确定性工作流引擎 |
 
-配套前端 bundle：`@dsh-plugins/token-saver-ui`（在 DSH Web 界面渲染"Plugins 页"与"工作流画布页"）。
+配套前端 bundle：`@dsh-plugins/token-saver-ui`（在 DSH Web 界面渲染"Plugins 页"与"工作流画布页"）；`@dsh-plugins/flow-ui` 渲染 flow 插件的列表页与画布编辑器。
 
 ---
 

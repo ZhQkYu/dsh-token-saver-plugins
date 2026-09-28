@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Flow",
+    "description": "Coze-style deterministic workflow engine: typed variables, data flow, control flow, and workflows exposed as tools."
+  }
+}

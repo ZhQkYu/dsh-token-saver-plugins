@@ -35,6 +35,15 @@ importers:
       '@deepseek-ai/dsh-permission-presets':
         specifier: link:../deepseek-harness/packages/interaction/permission-presets
         version: link:../deepseek-harness/packages/interaction/permission-presets
+      '@deepseek-ai/dsh-ptc-runtime':
+        specifier: link:../deepseek-harness/packages/ptc-runtime/ptc-runtime
+        version: link:../deepseek-harness/packages/ptc-runtime/ptc-runtime
+      '@deepseek-ai/dsh-sandbox':
+        specifier: link:../deepseek-harness/packages/sandbox/sandbox
+        version: link:../deepseek-harness/packages/sandbox/sandbox
+      '@deepseek-ai/dsh-sandbox-policy':
+        specifier: link:../deepseek-harness/packages/sandbox/sandbox-policy
+        version: link:../deepseek-harness/packages/sandbox/sandbox-policy
       '@deepseek-ai/dsh-session':
         specifier: link:../deepseek-harness/packages/core/session
         version: link:../deepseek-harness/packages/core/session
@@ -44,12 +53,18 @@ importers:
       '@deepseek-ai/dsh-session-title':
         specifier: link:../deepseek-harness/packages/session/session-title
         version: link:../deepseek-harness/packages/session/session-title
+      '@deepseek-ai/dsh-subagent':
+        specifier: link:../deepseek-harness/packages/subagent/subagent
+        version: link:../deepseek-harness/packages/subagent/subagent
       '@deepseek-ai/dsh-system-prompt':
         specifier: link:../deepseek-harness/packages/core/system-prompt
         version: link:../deepseek-harness/packages/core/system-prompt
       '@deepseek-ai/dsh-tools':
         specifier: link:../deepseek-harness/packages/core/tools
         version: link:../deepseek-harness/packages/core/tools
+      '@deepseek-ai/dsh-user-questions':
+        specifier: link:../deepseek-harness/packages/interaction/user-questions
+        version: link:../deepseek-harness/packages/interaction/user-questions
       '@deepseek-ai/dsh-workflow':
         specifier: link:../deepseek-harness/packages/workflow/workflow
         version: link:../deepseek-harness/packages/workflow/workflow
@@ -71,6 +86,36 @@ importers:
       vitest:
         specifier: ^4.1.8
         version: 4.1.11(@types/node@22.20.4)(esbuild@0.25.12)
+
+  plugins/flow:
+    dependencies:
+      undici:
+        specifier: ^6.21.0
+        version: 6.28.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.6.5
+
+  plugins/flow-ui:
+    devDependencies:
+      '@dsh-plugins/flow':
+        specifier: workspace:*
+        version: link:../flow
+      '@types/react':
+        specifier: ~18.3.1
+        version: 18.3.31
+      '@types/react-dom':
+        specifier: ~18.3.1
+        version: 18.3.7(@types/react@18.3.31)
+      '@xyflow/react':
+        specifier: ^12.3.0
+        version: 12.11.6(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.3.1(react@18.3.1)
 
   plugins/token-saver:
     dependencies:
@@ -707,6 +752,10 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
+  undici@6.28.1:
+    resolution: {integrity: sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==}
+    engines: {node: '>=18.17'}
+
   use-sync-external-store@1.7.0:
     resolution: {integrity: sha512-6L+EeigHMQhdaIPNIFUKwfWJSwWFQ8gJbJ2DLOs5sDIegTwR9fRxvnM3uciHKjIZhFz+KAv2emhWMRvDmMcY8A==}
     peerDependencies:
@@ -1288,6 +1337,8 @@ snapshots:
   typescript@6.0.3: {}
 
   undici-types@6.21.0: {}
+
+  undici@6.28.1: {}
 
   use-sync-external-store@1.7.0(react@18.3.1):
     dependencies:
