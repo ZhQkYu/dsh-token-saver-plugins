@@ -4,13 +4,22 @@ The browser half of [`@dsh-plugins/flow`](../flow/README.md): a "Flow" sidebar e
 
 ## Editor
 
-- **Canvas.** Drag nodes from the palette (or click to add; with a loop/batch selected, new nodes go inside it). Every output port is its own handle, so condition, intent, question, and error branches connect individually. Connections are checked while dragging (same scope, existing port, no cycle, no duplicate). Moves, resizes, connections, and deletions are written to the flow document and autosaved; `Ctrl/⌘+S` saves immediately. A save conflict offers "load latest" or "overwrite".
-- **Inspector.** Title, description, input bindings (a value, or a reference picked from the upstream variables in scope), and the full node settings as JSON (applied with the button or `Ctrl/⌘+Enter`).
-- **Problems.** The flow is validated locally with the shared spec on every change; click an issue to select its node.
-- **Run panel.** Pick a workspace, fill the start inputs, run the saved draft, and follow it live: node status and taken edges on the canvas, outputs, messages, and an answer box for waiting `question` nodes. The stream reconnects from the last event and falls back to polling.
+Building a flow needs no JSON:
+
+1. Click **Start** and add the inputs a run needs (name, type, required, default).
+2. Select a node and click a node type in the palette: the new node goes after the selected one and is connected; when the selected node already leads somewhere, the new node is inserted in between. With a loop or batch selected, it goes inside, after the last body node. Nothing selected places it in the middle of the view. Dragging from the palette drops it where you release it.
+3. Fill in the node on the right. Every value is either typed in or picked from a dropdown of the upstream variables in scope (grouped by node, including object fields and loop `item`/`index`). In prompts and other text, **Reference a variable** inserts `{{name}}` and adds the input in one step; the chips insert existing inputs.
+4. On **End**, pick the variables to return, then **Run** at the bottom.
+
+- **Canvas.** Cards show a one-line summary (prompt, URL, tool, inputs/outputs). Every output port is its own handle, so condition, intent, question, and error branches connect individually; connections are checked while dragging (same scope, existing port, no cycle, no duplicate). Deleting a node in a chain reconnects its neighbors. **Tidy up** arranges each scope left to right by execution order and fits containers to their bodies. Edits autosave; `Ctrl/⌘+S` saves immediately; a save conflict offers "load latest" or "overwrite".
+- **Inspector.** A form per node type: model picker, prompt templates, JSON output fields, condition branches with operators chosen by the left value's type, loop mode/list/variables/collected outputs, HTTP method/URL/headers/query/body, tool picker whose required parameters appear automatically, subflow picker whose inputs follow the subflow's start fields, question options, and failure handling (stop, defaults, or error exit; retries; timeout). "More" holds the description and the raw JSON for advanced edits.
+- **Problems.** The flow is validated locally with the shared spec on every change; messages are localized, name the field, and clicking one selects its node.
+- **Run panel.** Pick a workspace, fill the start inputs, run the saved draft, and follow it live: node status and taken edges on the canvas, outputs, messages, the failing node, and an answer box for waiting `question` nodes. The stream reconnects from the last event and falls back to polling.
 - **Publish.** Publishing never enables the tool by default; the dialog sets the version note and the optional `flow_<name>` tool.
 
-Not yet available: dragging nodes into or out of an existing container, undo/redo, copy/paste, auto layout, a code editor with highlighting, and run history.
+The tool picker lists tools registered globally or visible to an open session's Agent; tools of presets with no open session can be typed in by name.
+
+Not yet available: dragging nodes into or out of an existing container, undo/redo, copy/paste, a code editor with highlighting, and run history.
 
 ## Build
 

@@ -29,7 +29,7 @@ export interface RunPanelProps {
 
 /** The run panel. */
 export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps): ReactNode {
-  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | undefined>(undefined)
   const [workspaceId, setWorkspaceId] = useState(() => localStorage.getItem(WORKSPACE_KEY) ?? '')
   const [values, setValues] = useState<Record<string, string>>({})
   const [runId, setRunId] = useState<string | undefined>(undefined)
@@ -44,7 +44,7 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
     api.workspaces().then((list) => {
       setWorkspaces(list)
       setWorkspaceId(current => list.some(workspace => workspace.id === current) ? current : list[0]?.id ?? '')
-    }).catch((error: unknown) => { setNotice(errorText(error)) })
+    }).catch((error: unknown) => { setWorkspaces([]); setNotice(errorText(error)) })
     return () => { follow.current?.abort() }
   }, [])
   useEffect(() => { if (workspaceId !== '') localStorage.setItem(WORKSPACE_KEY, workspaceId) }, [workspaceId])
@@ -120,13 +120,15 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
     <div className="dsflow-run">
       <div className="dsflow-run__bar">
         <span className="dsflow-run__title">{t('run')}</span>
-        {workspaces.length === 0
-          ? <span className="dsflow-muted">{t('noWorkspace')}</span>
-          : (
-            <select className="dsflow-input dsflow-input--narrow" aria-label={t('workspace')} value={workspaceId} onChange={event => { setWorkspaceId(event.target.value) }}>
-              {workspaces.map(workspace => <option key={workspace.id} value={workspace.id} title={workspace.path}>{workspace.title}</option>)}
-            </select>
-          )}
+        {workspaces === undefined
+          ? <span className="dsflow-muted">{t('loading')}</span>
+          : workspaces.length === 0
+            ? <span className="dsflow-muted">{t('noWorkspace')}</span>
+            : (
+              <select className="dsflow-input dsflow-input--narrow" aria-label={t('workspace')} value={workspaceId} onChange={event => { setWorkspaceId(event.target.value) }}>
+                {workspaces.map(workspace => <option key={workspace.id} value={workspace.id} title={workspace.path}>{workspace.title}</option>)}
+              </select>
+            )}
         <Button variant="primary" size="sm" disabled={busy || running || workspaceId === ''} onClick={() => { void start() }}>{t('run')}</Button>
         {running && <Button variant="outline" size="sm" onClick={() => { void stop() }}>{t('stop')}</Button>}
         {view !== undefined && <span className="dsflow-run__status" data-status={view.status}>{t(`status.${view.status}` as LocaleKey)}</span>}
@@ -162,7 +164,7 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
             </div>
           )}
           {(pending.answer.kind === 'text' || pending.answer.allowOther) && (
-            <div className="dsflow-binding__row">
+            <div className="dsflow-bind__row">
               <input className="dsflow-input" placeholder={pending.answer.kind === 'text' ? t('answer') : t('other')} value={answerText} onChange={event => { setAnswerText(event.target.value) }} onKeyDown={(event) => { if (event.key === 'Enter') void submitAnswer({ text: answerText }) }} />
               <Button variant="primary" size="sm" onClick={() => { void submitAnswer({ text: answerText }) }}>{t('submit')}</Button>
             </div>
@@ -171,7 +173,11 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
       )}
       {view !== undefined && (
         <div className="dsflow-run__result">
-          {view.error !== undefined && <div className="dsflow-error">{t('runError')}: {view.error.code} {view.error.message}</div>}
+          {view.error !== undefined && (
+            <div className="dsflow-error" title={view.error.code}>
+              {t('runError')}{view.error.nodeId === undefined ? '' : ` · ${doc.nodes.find(node => node.id === view.error?.nodeId)?.title ?? view.error.nodeId}`}: {view.error.message}
+            </div>
+          )}
           {view.messages.length > 0 && (
             <div>
               <span className="dsflow-field__label">{t('messages')}</span>
@@ -181,7 +187,14 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
           {view.outputs !== undefined && (
             <div>
               <span className="dsflow-field__label">{t('outputs')}</span>
-              <pre className="dsflow-pre">{JSON.stringify(view.outputs, null, 2)}</pre>
+              {view.outputs !== null && typeof view.outputs === 'object' && !Array.isArray(view.outputs)
+                ? Object.entries(view.outputs).map(([name, value]) => (
+                  <div key={name} className="dsflow-run__output">
+                    <span className="dsflow-run__output-name">{name}</span>
+                    <pre className="dsflow-pre">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>
+                  </div>
+                ))
+                : <pre className="dsflow-pre">{JSON.stringify(view.outputs, null, 2)}</pre>}
             </div>
           )}
         </div>

@@ -15,23 +15,29 @@ import {
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { FlowDocument, FlowLookup, FlowNode, Issue, NodeType, RunView, ValidateLimits } from '@dsh-plugins/flow/spec'
 import { NODE_SPECS, validateFlow } from '@dsh-plugins/flow/spec'
-import { api, errorText, ApiError, type CatalogFlow, type FlowMeta } from '../api.ts'
-import { canConnect, connect, createNode, moveNode, newId, removeEdges, removeNodes, replaceNode, resizeNode, toRfEdges, toRfNodes, type NodeOverlay, type RfNode } from './convert.ts'
+import { api, errorText, ApiError, type CatalogFlow, type FlowMeta, type ModelCatalog, type ToolSummary } from '../api.ts'
+import { addNodeAfter, addNodeAt, addNodeInside, autoLayout, canConnect, connect, createNode, moveNode, newId, removeEdges, removeNodeAndReconnect, removeNodes, replaceNode, resizeNode, seedNode, toRfEdges, toRfNodes, type NodeOverlay, type RfNode } from './convert.ts'
 import { CommentNodeView, ContainerNodeView, FlowNodeView, NodeViewContext } from './NodeView.tsx'
 import { NodeInspector } from './forms.tsx'
+import { issueField, issueText } from './issues.ts'
+import type { FormContext } from './node-forms.tsx'
 import { PublishDialog, type PublishRequest } from './PublishDialog.tsx'
 import { RunPanel } from '../run/RunPanel.tsx'
 import type { LocaleKey, Translate } from '../locales.ts'
 
 /** The palette, by category. */
 const PALETTE: { category: LocaleKey; types: NodeType[] }[] = [
-  { category: 'palette.basic', types: ['start', 'end', 'comment'] },
   { category: 'palette.ai', types: ['llm', 'intent', 'agent'] },
-  { category: 'palette.logic', types: ['condition', 'loop', 'batch', 'break', 'continue', 'assign', 'aggregate', 'subflow'] },
+  { category: 'palette.logic', types: ['condition', 'loop', 'batch', 'aggregate', 'subflow'] },
+  { category: 'palette.loopControl', types: ['break', 'continue', 'assign'] },
   { category: 'palette.data', types: ['code', 'text', 'json', 'http'] },
   { category: 'palette.tool', types: ['tool'] },
   { category: 'palette.interaction', types: ['question', 'message'] },
+  { category: 'palette.basic', types: ['comment', 'start', 'end'] },
 ]
+
+/** Node types that must sit directly inside a loop. */
+const LOOP_ONLY: ReadonlySet<NodeType> = new Set(['break', 'continue', 'assign'])
 
 const NODE_TYPES_RF = { flow: FlowNodeView, container: ContainerNodeView, comment: CommentNodeView }
 const DRAG_MIME = 'application/x-dsh-flow-node'
@@ -59,6 +65,9 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   const saving = useRef<Promise<boolean> | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [catalog, setCatalog] = useState<CatalogFlow[]>([])
+  const [tools, setTools] = useState<ToolSummary[] | undefined>(undefined)
+  const [models, setModels] = useState<ModelCatalog | undefined>(undefined)
+  const canvasRef = useRef<HTMLDivElement>(null)
   const [limits, setLimits] = useState<ValidateLimits>({})
   const [runView, setRunView] = useState<RunView | undefined>(undefined)
   const [hostIssues, setHostIssues] = useState<Issue[]>([])
@@ -69,6 +78,8 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   useEffect(() => {
     api.catalogFlows().then(setCatalog).catch((error: unknown) => { setNotice(errorText(error)) })
     api.limits().then(setLimits).catch((error: unknown) => { setNotice(errorText(error)) })
+    api.tools().then(setTools).catch(() => { setTools([]) })
+    api.models().then(setModels).catch(() => { setModels(undefined) })
     return () => { if (saveTimer.current !== undefined) clearTimeout(saveTimer.current) }
   }, [])
 
@@ -189,9 +200,10 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   const onNodesChange = useCallback((changes: NodeChange<RfNode>[]): void => {
     setRfNodes(current => applyNodeChanges(changes, current))
     let next = docRef.current
+    const removals = changes.filter(change => change.type === 'remove')
     for (const change of changes) {
       if (change.type === 'position' && change.dragging === false && change.position !== undefined) next = moveNode(next, change.id, change.position)
-      else if (change.type === 'remove') next = removeNodes(next, [change.id])
+      else if (change.type === 'remove') next = removals.length === 1 ? removeNodeAndReconnect(next, change.id, newId('edge')) : removeNodes(next, [change.id])
       else if (change.type === 'select' && change.selected) setSelectedId(change.id)
     }
     if (next !== docRef.current) commit(next)
@@ -212,21 +224,48 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
 
   const addNode = useCallback((type: NodeType, dropPoint?: { x: number; y: number }): void => {
     const current = docRef.current
+    const fresh = seedNode(createNode(type, newId(type), { x: 0, y: 0 }, t(`nodeType.${type}` as LocaleKey)), t)
     const selected = current.nodes.find(node => node.id === selectedId)
+    const edgeId = (): string => newId('edge')
     let parent: FlowNode | undefined
-    let position: { x: number; y: number }
+    let next: FlowDocument
     if (dropPoint !== undefined) {
       parent = containerAt(current, dropPoint, id => flowApi.getInternalNode(id)?.internals.positionAbsolute)
       const origin = parent === undefined ? undefined : flowApi.getInternalNode(parent.id)?.internals.positionAbsolute
-      position = origin === undefined ? dropPoint : { x: dropPoint.x - origin.x, y: dropPoint.y - origin.y }
+      const position = origin === undefined ? dropPoint : { x: dropPoint.x - origin.x, y: dropPoint.y - origin.y }
+      next = addNodeAt(current, { ...fresh, position: { x: Math.round(position.x), y: Math.round(position.y) }, ...(parent === undefined ? {} : { parentId: parent.id }) } as FlowNode)
+    } else if (selected !== undefined && NODE_SPECS[selected.type].container) {
+      parent = selected
+      next = addNodeInside(current, selected, fresh, edgeId)
+    } else if (selected !== undefined && selected.type !== 'comment') {
+      parent = current.nodes.find(node => node.id === selected.parentId)
+      next = addNodeAfter(current, selected, fresh, edgeId)
     } else {
-      parent = selected !== undefined && NODE_SPECS[selected.type].container ? selected : undefined
-      const siblings = current.nodes.filter(node => node.parentId === parent?.id).length
-      position = parent === undefined ? { x: 80 + siblings * 30, y: 80 + siblings * 30 } : { x: 30 + siblings * 20, y: 60 + siblings * 20 }
+      const rect = canvasRef.current?.getBoundingClientRect()
+      const center = rect === undefined ? { x: 80, y: 80 } : flowApi.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 3 })
+      next = addNodeAt(current, { ...fresh, position: { x: Math.round(center.x - 100), y: Math.round(center.y) } })
     }
-    const node = createNode(type, newId(type), position, t(`nodeType.${type}` as LocaleKey), parent?.id)
-    commit({ ...current, nodes: [...current.nodes, node] })
-    setSelectedId(node.id)
+    if (LOOP_ONLY.has(type) && parent?.type !== 'loop') {
+      setNotice(t('palette.loopOnly'))
+      return
+    }
+    setNotice('')
+    commit(next)
+    setSelectedId(fresh.id)
+    setTimeout(() => {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      const internal = flowApi.getInternalNode(fresh.id)
+      if (rect === undefined || internal === undefined) return
+      const ids = [fresh.id, ...docRef.current.edges.filter(edge => edge.source === fresh.id).map(edge => edge.target)]
+      const hidden = ids.some((id) => {
+        const target = flowApi.getInternalNode(id)
+        if (target === undefined) return false
+        const screen = flowApi.flowToScreenPosition(target.internals.positionAbsolute)
+        return screen.x < rect.left || screen.y < rect.top || screen.x + 180 > rect.right || screen.y + 60 > rect.bottom
+      })
+      const origin = internal.internals.positionAbsolute
+      if (hidden) void flowApi.setCenter(origin.x + 100, origin.y + 30, { zoom: flowApi.getZoom(), duration: 200 })
+    }, 50)
   }, [commit, flowApi, selectedId, t])
 
   const onDrop = useCallback((event: DragEvent<HTMLDivElement>): void => {
@@ -255,7 +294,9 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   }
 
   const selectedNode = doc.nodes.find(node => node.id === selectedId)
-  const nodeViewContext = useMemo(() => ({ t, onResize: (nodeId: string, size: { width: number; height: number }) => { commit(resizeNode(docRef.current, nodeId, size)) } }), [t, commit])
+  const flowName = useCallback((flowId: string) => catalog.find(entry => entry.id === flowId)?.name, [catalog])
+  const nodeViewContext = useMemo(() => ({ t, flowName, onResize: (nodeId: string, size: { width: number; height: number }) => { commit(resizeNode(docRef.current, nodeId, size)) } }), [t, commit, flowName])
+  const formContext = useMemo<FormContext>(() => ({ doc, lookup, t, tools, models, flows: catalog }), [doc, lookup, t, tools, models, catalog])
   const errorCount = issues.filter(issue => issue.severity === 'error').length
 
   return (
@@ -277,6 +318,7 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
           {notice !== '' && <span className="dsflow-muted">{notice}</span>}
           <span className="dsflow-spacer" />
           <span className={errorCount > 0 ? 'dsflow-error' : 'dsflow-muted'}>{issues.length} {t('issues')}</span>
+          <Button variant="outline" size="sm" onClick={() => { commit(autoLayout(docRef.current)); setTimeout(() => { void flowApi.fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.6, duration: 200 }) }, 50) }}>{t('layout')}</Button>
           <Button variant="outline" size="sm" onClick={() => { void flush() }}>{t('save')}</Button>
           <Button variant="primary" size="sm" onClick={() => { setPublishing({ busy: false, error: '' }) }}>{t('publish')}</Button>
         </div>
@@ -289,6 +331,7 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
         )}
         <div className="dsflow-editor__body">
           <div className="dsflow-palette">
+            <div className="dsflow-muted dsflow-palette__hint">{t('palette.hint')}</div>
             {PALETTE.map(group => (
               <div key={group.category} className="dsflow-palette__category">
                 <div className="dsflow-palette__label">{t(group.category)}</div>
@@ -297,18 +340,20 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
                     key={type}
                     type="button"
                     className="dsflow-palette__item"
+                    data-node-type={type}
+                    title={t(`nodeHelp.${type}` as LocaleKey)}
                     draggable
                     onDragStart={event => { event.dataTransfer.setData(DRAG_MIME, type); event.dataTransfer.effectAllowed = 'move' }}
                     onClick={() => { addNode(type) }}
                   >
+                    <span className="dsflow-palette__dot" />
                     {t(`nodeType.${type}` as LocaleKey)}
                   </button>
                 ))}
               </div>
             ))}
-            <div className="dsflow-muted dsflow-palette__hint">{t('selectContainerHint')}</div>
           </div>
-          <div className="dsflow-editor__canvas" onDrop={onDrop} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}>
+          <div ref={canvasRef} className="dsflow-editor__canvas" onDrop={onDrop} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}>
             <ReactFlow<RfNode>
               nodes={rfNodes}
               edges={rfEdges}
@@ -319,7 +364,9 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
               isValidConnection={isValidConnection}
               onPaneClick={() => { setSelectedId(undefined) }}
               deleteKeyCode={['Backspace', 'Delete']}
+              connectionRadius={36}
               fitView
+              fitViewOptions={{ maxZoom: 1, minZoom: 0.75, padding: 0.2 }}
             >
               <Background />
               <Controls />
@@ -328,16 +375,15 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
           </div>
           <div className="dsflow-editor__side">
             {selectedNode === undefined
-              ? <div className="dsflow-muted">{t('selectNode')}</div>
+              ? <EmptyInspector t={t} />
               : (
                 <NodeInspector
                   key={selectedNode.id}
-                  doc={doc}
                   node={selectedNode}
-                  lookup={lookup}
-                  t={t}
+                  ctx={formContext}
+                  issues={issues.filter(issue => issue.nodeId === selectedNode.id)}
                   onChange={next => { commit(replaceNode(docRef.current, next)) }}
-                  onDelete={() => { commit(removeNodes(docRef.current, [selectedNode.id])); setSelectedId(undefined) }}
+                  onDelete={() => { commit(removeNodeAndReconnect(docRef.current, selectedNode.id, newId('edge'))); setSelectedId(undefined) }}
                 />
               )}
           </div>
@@ -354,10 +400,10 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
                 title={issue.message}
                 onClick={() => { if (issue.nodeId !== undefined) setSelectedId(issue.nodeId) }}
               >
-                <span className="dsflow-problem__code">{t(`issue.${issue.code}` as LocaleKey)}</span>
-                {issue.nodeId !== undefined && <span>{doc.nodes.find(node => node.id === issue.nodeId)?.title ?? issue.nodeId}</span>}
-                {issue.field !== undefined && <span className="dsflow-muted">{issue.field}</span>}
-                <span className="dsflow-muted">{issue.message}</span>
+                <span className="dsflow-problem__code">{issue.severity === 'error' ? '●' : '▲'}</span>
+                {issue.nodeId !== undefined && <span className="dsflow-problem__node">{doc.nodes.find(node => node.id === issue.nodeId)?.title ?? issue.nodeId}</span>}
+                <span>{issueText(issue, t)}</span>
+                {issueField(issue, t) !== '' && <span className="dsflow-muted">{issueField(issue, t)}</span>}
               </button>
             ))}
         </div>
@@ -367,6 +413,21 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
         )}
       </div>
     </NodeViewContext.Provider>
+  )
+}
+
+/** The inspector placeholder: a short how-to for first-time users. */
+function EmptyInspector({ t }: { t: Translate }): ReactNode {
+  return (
+    <div className="dsflow-guide">
+      <div className="dsflow-section__title">{t('guide.title')}</div>
+      <ol>
+        <li>{t('guide.step1')}</li>
+        <li>{t('guide.step2')}</li>
+        <li>{t('guide.step3')}</li>
+        <li>{t('guide.step4')}</li>
+      </ol>
+    </div>
   )
 }
 

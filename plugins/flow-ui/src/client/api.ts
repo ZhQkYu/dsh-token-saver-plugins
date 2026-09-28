@@ -50,6 +50,12 @@ export interface ToolSummary {
   parameters: unknown
 }
 
+/** The models the Host can call, by provider. */
+export interface ModelCatalog {
+  default: { provider: string; model: string }
+  groups: { id: string; name: string; models: { id: string; name: string }[] }[]
+}
+
 /** A rejected request, with the Host's structured body when present. */
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly issues?: Issue[], readonly code?: string) {
@@ -95,6 +101,7 @@ export const api = {
   catalogFlows: () => request<{ flows: CatalogFlow[] }>('api/dsh-flow/catalog.flows').then(res => res.flows),
   limits: () => request<{ limits: ValidateLimits }>('api/dsh-flow/catalog.limits').then(res => res.limits),
   tools: () => request<{ tools: ToolSummary[] }>('api/dsh-flow/catalog.tools').then(res => res.tools),
+  models: () => request<ModelCatalog>('api/dsh-flow/catalog.models'),
 }
 
 /** Error text for display. */
