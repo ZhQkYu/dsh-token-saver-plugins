@@ -129,27 +129,6 @@ importers:
         specifier: ^4.4.3
         version: 4.6.5
 
-  plugins/token-saver-ui:
-    devDependencies:
-      '@dsh-plugins/token-saver':
-        specifier: workspace:*
-        version: link:../token-saver
-      '@types/react':
-        specifier: ~18.3.1
-        version: 18.3.31
-      '@types/react-dom':
-        specifier: ~18.3.1
-        version: 18.3.7(@types/react@18.3.31)
-      '@xyflow/react':
-        specifier: ^12.3.0
-        version: 12.11.6(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.2.0
-        version: 18.3.1(react@18.3.1)
-
 packages:
 
   '@esbuild/aix-ppc64@0.25.12':

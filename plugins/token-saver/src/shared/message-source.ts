@@ -11,7 +11,7 @@
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
 /** The token-saver features that inject a message. */
-export type TokenSaverFeature = 'handoff' | 'handoff-suggest' | 'tool-gate' | 'canvas-run'
+export type TokenSaverFeature = 'handoff' | 'handoff-suggest' | 'tool-gate'
 
 /** Attribution for a message originated by a token-saver plugin. */
 export interface TokenSaverMessageSource {

@@ -1,6 +1,6 @@
 /**
  * Launch a new workspace-backed root Session, modelled on the webhook package's
- * `createWebhookSession` ordering. Used by session-handoff and workflow-canvas
+ * `createWebhookSession` ordering. Used by session-handoff
  * to spawn a fresh conversation from plugin context.
  *
  * The resulting Agent is owned by the plugin `ctx`; if the plugin is later

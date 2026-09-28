@@ -79,9 +79,3 @@
             enabled: false
             minIntervalMs: 3000
             selectors: { input: '', message: '' }
-
-    - id: token-saver-workflow-canvas
-      name: '@dsh-plugins/token-saver/workflow-canvas'
-      config:
-        maxGraphBytes: 262144
-        keepRuns: 20

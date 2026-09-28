@@ -3,19 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Token-saving plugins for DSH: tool gating, session handoff, free web-AI bridge, workflow canvas",
+  "description": "Token-saving plugins for DSH: tool gating, session handoff, free web-AI bridge",
   "exports": {
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
-    "./protocol": { "types": "./lib/protocol.d.ts", "default": "./lib/protocol.js" },
     "./tool-gate": "./lib/tool-gate/index.js",
     "./session-handoff": "./lib/session-handoff/index.js",
     "./web-ai-bridge": "./lib/web-ai-bridge/index.js",
-    "./workflow-canvas": "./lib/workflow-canvas/index.js",
     "./tool-gate/locale/*.json": "./locale/tool-gate/*.json",
     "./session-handoff/locale/*.json": "./locale/session-handoff/*.json",
-    "./web-ai-bridge/locale/*.json": "./locale/web-ai-bridge/*.json",
-    "./workflow-canvas/locale/*.json": "./locale/workflow-canvas/*.json"
+    "./web-ai-bridge/locale/*.json": "./locale/web-ai-bridge/*.json"
   },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "scripts": {
@@ -40,9 +37,7 @@
     "@deepseek-ai/dsh-workspace": "*",
     "@deepseek-ai/dsh-agent-preset-registry": "*",
     "@deepseek-ai/dsh-permission-presets": "*",
-    "@deepseek-ai/dsh-client-connection": "*",
     "@deepseek-ai/dsh-brand": "*",
-    "@deepseek-ai/dsh-home-paths": "*",
-    "@deepseek-ai/dsh-workflow": "*"
+    "@deepseek-ai/dsh-home-paths": "*"
   }
 }
