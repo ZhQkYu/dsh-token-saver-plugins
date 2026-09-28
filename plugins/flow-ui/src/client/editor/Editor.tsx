@@ -13,21 +13,27 @@ import {
   type Connection, type EdgeChange, type NodeChange,
 } from '@xyflow/react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { FlowDocument, FlowLookup, FlowNode, Issue, NodeType, RunView, ValidateLimits } from '@dsh-plugins/flow/spec'
-import { NODE_SPECS, validateFlow } from '@dsh-plugins/flow/spec'
-import { api, errorText, ApiError, type CatalogFlow, type FlowMeta, type ModelCatalog, type ToolSummary } from '../api.ts'
+import type { FlowDocument, FlowLookup, FlowNode, Issue, JsonValue, NodeType, RunView, ValidateLimits } from '@dsh-plugins/flow/spec'
+import { GUIDED_NODE_TYPES, NODE_SPECS, guidedPrompt, validateFlow } from '@dsh-plugins/flow/spec'
+import { api, errorText, ApiError, startFieldsOf, type CatalogFlow, type FlowMeta, type ModelCatalog, type ToolSummary } from '../api.ts'
 import { addNodeAfter, addNodeAt, addNodeInside, autoLayout, canConnect, connect, createNode, moveNode, newId, removeEdges, removeNodeAndReconnect, removeNodes, replaceNode, resizeNode, seedNode, toRfEdges, toRfNodes, type NodeOverlay, type RfNode } from './convert.ts'
 import { CommentNodeView, ContainerNodeView, FlowNodeView, NodeViewContext } from './NodeView.tsx'
 import { NodeInspector } from './forms.tsx'
 import { issueField, issueText } from './issues.ts'
 import type { FormContext } from './node-forms.tsx'
 import { PublishDialog, type PublishRequest } from './PublishDialog.tsx'
+import { syncToolArgs, toolParams } from './variables.ts'
 import { RunPanel } from '../run/RunPanel.tsx'
 import type { LocaleKey, Translate } from '../locales.ts'
 
+/** A palette entry: a node type, or the web AI preset (a `tool` node calling `web_ai_ask`). */
+type PaletteItem = NodeType | 'webai'
+
+const WEB_AI_TOOL = 'web_ai_ask'
+
 /** The palette, by category. */
-const PALETTE: { category: LocaleKey; types: NodeType[] }[] = [
-  { category: 'palette.ai', types: ['llm', 'intent', 'agent'] },
+const PALETTE: { category: LocaleKey; types: PaletteItem[] }[] = [
+  { category: 'palette.ai', types: ['agent', 'llm', 'intent', 'webai'] },
   { category: 'palette.logic', types: ['condition', 'loop', 'batch', 'aggregate', 'subflow'] },
   { category: 'palette.loopControl', types: ['break', 'continue', 'assign'] },
   { category: 'palette.data', types: ['code', 'text', 'json', 'http'] },
@@ -222,9 +228,20 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   const isValidConnection = useCallback((connection: { source: string | null; target: string | null; sourceHandle?: string | null }) =>
     canConnect(docRef.current, { source: connection.source, target: connection.target, sourceHandle: connection.sourceHandle }), [])
 
-  const addNode = useCallback((type: NodeType, dropPoint?: { x: number; y: number }): void => {
+  const guided = doc.kind === 'guided'
+  const [preview, setPreview] = useState(false)
+
+  /** The palette label of an item: guided flows call the agent node a step. */
+  const itemLabel = useCallback((item: PaletteItem): string => item === 'webai' ? t('palette.webai') : guided && item === 'agent' ? t('guided.step') : t(`nodeType.${item}` as LocaleKey), [guided, t])
+
+  const addNode = useCallback((item: PaletteItem, dropPoint?: { x: number; y: number }): void => {
     const current = docRef.current
-    const fresh = seedNode(createNode(type, newId(type), { x: 0, y: 0 }, t(`nodeType.${type}` as LocaleKey)), t)
+    const type: NodeType = item === 'webai' ? 'tool' : item
+    const created = seedNode(createNode(type, newId(type), { x: 0, y: 0 }, itemLabel(item)), t, guided)
+    const webAi = tools?.find(tool => tool.name === WEB_AI_TOOL)
+    const fresh: FlowNode = item === 'webai' && created.type === 'tool'
+      ? { ...created, data: { tool: WEB_AI_TOOL, args: webAi === undefined ? [] : syncToolArgs(toolParams(webAi.parameters), []) } }
+      : created
     const selected = current.nodes.find(node => node.id === selectedId)
     const edgeId = (): string => newId('edge')
     let parent: FlowNode | undefined
@@ -266,13 +283,13 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
       const origin = internal.internals.positionAbsolute
       if (hidden) void flowApi.setCenter(origin.x + 100, origin.y + 30, { zoom: flowApi.getZoom(), duration: 200 })
     }, 50)
-  }, [commit, flowApi, selectedId, t])
+  }, [commit, flowApi, guided, itemLabel, selectedId, t, tools])
 
   const onDrop = useCallback((event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
-    const type = event.dataTransfer.getData(DRAG_MIME) as NodeType
-    if (!(type in NODE_SPECS)) return
-    addNode(type, flowApi.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
+    const item = event.dataTransfer.getData(DRAG_MIME)
+    if (item !== 'webai' && !(item in NODE_SPECS)) return
+    addNode(item as PaletteItem, flowApi.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
   }, [addNode, flowApi])
 
   const publish = async (request: PublishRequest): Promise<void> => {
@@ -295,8 +312,19 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
 
   const selectedNode = doc.nodes.find(node => node.id === selectedId)
   const flowName = useCallback((flowId: string) => catalog.find(entry => entry.id === flowId)?.name, [catalog])
-  const nodeViewContext = useMemo(() => ({ t, flowName, onResize: (nodeId: string, size: { width: number; height: number }) => { commit(resizeNode(docRef.current, nodeId, size)) } }), [t, commit, flowName])
-  const formContext = useMemo<FormContext>(() => ({ doc, lookup, t, tools, models, flows: catalog }), [doc, lookup, t, tools, models, catalog])
+  const nodeViewContext = useMemo(() => ({ t, flowName, guided, onResize: (nodeId: string, size: { width: number; height: number }) => { commit(resizeNode(docRef.current, nodeId, size)) } }), [t, commit, flowName, guided])
+  const formContext = useMemo<FormContext>(() => ({ doc, lookup, t, tools, models, flows: catalog, guided }), [doc, lookup, t, tools, models, catalog, guided])
+  const palette = useMemo(() => PALETTE.map(group => ({
+    ...group,
+    types: group.types.filter(item => item === 'webai'
+      ? tools?.some(tool => tool.name === WEB_AI_TOOL) === true
+      : !guided || GUIDED_NODE_TYPES.includes(item)),
+  })).filter(group => group.types.length > 0), [guided, tools])
+  const previewText = useMemo(() => {
+    if (!preview) return ''
+    const inputs: Record<string, JsonValue> = Object.fromEntries(startFieldsOf(doc).map(field => [field.name, `‹${field.name}›`]))
+    return guidedPrompt(doc, 'conversation', inputs, { flowName }, '‹runId›')
+  }, [doc, flowName, preview])
   const errorCount = issues.filter(issue => issue.severity === 'error').length
 
   return (
@@ -318,6 +346,8 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
           {notice !== '' && <span className="dsflow-muted">{notice}</span>}
           <span className="dsflow-spacer" />
           <span className={errorCount > 0 ? 'dsflow-error' : 'dsflow-muted'}>{issues.length} {t('issues')}</span>
+          {guided && <span className="dsflow-badge dsflow-badge--guided" title={t('kind.guidedHint')}>{t('kind.guided')}</span>}
+          {guided && <Button variant="outline" size="sm" onClick={() => { setPreview(true) }}>{t('guided.preview')}</Button>}
           <Button variant="outline" size="sm" onClick={() => { commit(autoLayout(docRef.current)); setTimeout(() => { void flowApi.fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.6, duration: 200 }) }, 50) }}>{t('layout')}</Button>
           <Button variant="outline" size="sm" onClick={() => { void flush() }}>{t('save')}</Button>
           <Button variant="primary" size="sm" onClick={() => { setPublishing({ busy: false, error: '' }) }}>{t('publish')}</Button>
@@ -332,22 +362,22 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
         <div className="dsflow-editor__body">
           <div className="dsflow-palette">
             <div className="dsflow-muted dsflow-palette__hint">{t('palette.hint')}</div>
-            {PALETTE.map(group => (
+            {palette.map(group => (
               <div key={group.category} className="dsflow-palette__category">
                 <div className="dsflow-palette__label">{t(group.category)}</div>
-                {group.types.map(type => (
+                {group.types.map(item => (
                   <button
-                    key={type}
+                    key={item}
                     type="button"
                     className="dsflow-palette__item"
-                    data-node-type={type}
-                    title={t(`nodeHelp.${type}` as LocaleKey)}
+                    data-node-type={item === 'webai' ? 'tool' : item}
+                    title={item === 'webai' ? t('nodeHelp.webai') : guided && item === 'agent' ? t('guided.stepHelp') : t(`nodeHelp.${item}` as LocaleKey)}
                     draggable
-                    onDragStart={event => { event.dataTransfer.setData(DRAG_MIME, type); event.dataTransfer.effectAllowed = 'move' }}
-                    onClick={() => { addNode(type) }}
+                    onDragStart={event => { event.dataTransfer.setData(DRAG_MIME, item); event.dataTransfer.effectAllowed = 'move' }}
+                    onClick={() => { addNode(item) }}
                   >
                     <span className="dsflow-palette__dot" />
-                    {t(`nodeType.${type}` as LocaleKey)}
+                    {itemLabel(item)}
                   </button>
                 ))}
               </div>
@@ -410,6 +440,18 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
         <RunPanel doc={doc} t={t} beforeRun={flush} onView={setRunView} onIssues={setHostIssues} />
         {publishing !== undefined && (
           <PublishDialog t={t} meta={meta} busy={publishing.busy} error={publishing.error} onSubmit={(request) => { void publish(request) }} onCancel={() => { setPublishing(undefined) }} />
+        )}
+        {preview && (
+          <div className="dsflow-dialog" role="dialog" aria-label={t('guided.preview')} onClick={() => { setPreview(false) }}>
+            <div className="dsflow-dialog__panel dsflow-dialog__panel--wide" onClick={(event) => { event.stopPropagation() }}>
+              <div className="dsflow-dialog__title">{t('guided.preview')}</div>
+              <div className="dsflow-hint">{t('guided.previewHint')}</div>
+              <pre className="dsflow-pre dsflow-pre--tall">{previewText}</pre>
+              <div className="dsflow-dialog__actions">
+                <Button variant="primary" size="sm" onClick={() => { setPreview(false) }}>{t('close')}</Button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </NodeViewContext.Provider>

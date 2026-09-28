@@ -127,6 +127,22 @@ export function toolParams(parameters: unknown): VarField[] {
 }
 
 /**
+ * The allowed values of a tool's string parameter, from its JSON Schema `enum`.
+ * @param parameters - the tool's JSON Schema parameters.
+ * @param name - the parameter name.
+ * @returns the values, or undefined when the parameter is not an enum.
+ */
+export function toolParamChoices(parameters: unknown, name: string): string[] | undefined {
+  if (parameters === null || typeof parameters !== 'object') return undefined
+  const properties = (parameters as { properties?: unknown }).properties
+  if (properties === null || typeof properties !== 'object') return undefined
+  const property = (properties as Record<string, unknown>)[name]
+  if (property === null || typeof property !== 'object') return undefined
+  const values = (property as { enum?: unknown }).enum
+  return Array.isArray(values) && values.every(value => typeof value === 'string') ? values : undefined
+}
+
+/**
  * Tool arguments for a parameter list: every required parameter, plus the
  * optional ones already set; existing values are kept.
  * @param params - the tool parameters.

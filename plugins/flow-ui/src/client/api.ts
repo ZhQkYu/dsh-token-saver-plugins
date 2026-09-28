@@ -7,13 +7,14 @@
  * @module @dsh-plugins/flow-ui/client/api
  */
 
-import type { FlowDocument, FlowLookupResult, Issue, JsonValue, RunEvent, RunSummary, ValidateLimits, VarField } from '@dsh-plugins/flow/spec'
+import type { FlowDocument, FlowKind, FlowLookupResult, Issue, JsonValue, RunEvent, RunSummary, ValidateLimits, VarField } from '@dsh-plugins/flow/spec'
 
 /** One flow row in the list. */
 export interface FlowSummary {
   id: string
   name: string
   description: string
+  kind: FlowKind
   updatedAt: number
   publishedVersion?: number
   toolName?: string
@@ -32,6 +33,7 @@ export interface FlowMeta {
 export interface CatalogFlow {
   id: string
   name: string
+  kind: FlowKind
   published?: FlowLookupResult & { version: number }
   draft: FlowLookupResult
 }
@@ -86,14 +88,14 @@ function post<T>(path: string, body: unknown): Promise<T> {
 export const api = {
   flows: () => request<{ flows: FlowSummary[] }>('api/dsh-flow/flows').then(res => res.flows),
   get: (id: string) => request<{ flow: FlowDocument; meta: FlowMeta | null }>(`api/dsh-flow/flow?id=${encodeURIComponent(id)}`),
-  create: (name: string, description: string) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.create', { name, description }).then(res => res.flow),
+  create: (name: string, description: string, kind: FlowKind) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.create', { name, description, kind }).then(res => res.flow),
   save: (flow: FlowDocument, baseRevision: number) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.save', { flow, baseRevision }).then(res => res.flow),
   remove: (id: string) => post<{ ok: true }>('api/dsh-flow/flow.delete', { id }),
   duplicate: (id: string) => post<{ flow: FlowDocument }>('api/dsh-flow/flow.duplicate', { id }).then(res => res.flow),
   publish: (id: string, baseRevision: number, note: string, tool: { enabled: boolean; name: string; description?: string } | undefined) =>
     post<{ meta: FlowMeta }>('api/dsh-flow/flow.publish', { id, baseRevision, note, ...(tool === undefined ? {} : { tool }) }).then(res => res.meta),
   startRun: (flowId: string, inputs: JsonValue, workspaceId: string) =>
-    post<{ runId: string }>('api/dsh-flow/run.start', { flowId, version: 'draft', inputs, workspaceId }).then(res => res.runId),
+    post<{ runId: string; sessionId?: string }>('api/dsh-flow/run.start', { flowId, version: 'draft', inputs, workspaceId }),
   cancelRun: (runId: string) => post<{ ok: true }>('api/dsh-flow/run.cancel', { runId }),
   answer: (runId: string, execKey: string, answer: { text?: string; optionId?: string }) => post<{ ok: true }>('api/dsh-flow/run.answer', { runId, execKey, answer }),
   getRun: (runId: string) => request<{ summary: RunSummary; events: RunEvent[] }>(`api/dsh-flow/run.get?runId=${encodeURIComponent(runId)}`),

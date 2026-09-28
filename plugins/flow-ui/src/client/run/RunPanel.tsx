@@ -37,6 +37,7 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
   const [pending, setPending] = useState<{ execKey: string; question: string; answer: AnswerSpec } | undefined>(undefined)
   const [answerText, setAnswerText] = useState('')
   const [notice, setNotice] = useState('')
+  const [session, setSession] = useState('')
   const [busy, setBusy] = useState(false)
   const follow = useRef<AbortController | null>(null)
 
@@ -64,7 +65,9 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
     setBusy(true)
     try {
       if (!await beforeRun()) return
-      const id = await api.startRun(doc.id, inputs, workspaceId)
+      const started = await api.startRun(doc.id, inputs, workspaceId)
+      const id = started.runId
+      setSession(started.sessionId === undefined ? '' : t('guided.started'))
       follow.current?.abort()
       const controller = new AbortController()
       follow.current = controller
@@ -129,11 +132,12 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
                 {workspaces.map(workspace => <option key={workspace.id} value={workspace.id} title={workspace.path}>{workspace.title}</option>)}
               </select>
             )}
-        <Button variant="primary" size="sm" disabled={busy || running || workspaceId === ''} onClick={() => { void start() }}>{t('run')}</Button>
+        <Button variant="primary" size="sm" disabled={busy || running || workspaceId === ''} onClick={() => { void start() }}>{doc.kind === 'guided' ? t('guided.run') : t('run')}</Button>
         {running && <Button variant="outline" size="sm" onClick={() => { void stop() }}>{t('stop')}</Button>}
         {view !== undefined && <span className="dsflow-run__status" data-status={view.status}>{t(`status.${view.status}` as LocaleKey)}</span>}
         {usage !== undefined && usage.inputTokens + usage.outputTokens > 0 && <span className="dsflow-muted">{usage.inputTokens + usage.outputTokens} {t('tokens')}</span>}
         {notice !== '' && <span className="dsflow-error">{notice}</span>}
+        {session !== '' && <span className="dsflow-muted">{session}</span>}
       </div>
       {fields.length > 0 && (
         <div className="dsflow-run__inputs">

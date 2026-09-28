@@ -26,13 +26,14 @@ export interface NodeInspectorProps {
 /** The inspector for the selected node. */
 export function NodeInspector({ node, ctx, issues, onChange, onDelete }: NodeInspectorProps): ReactNode {
   const { t } = ctx
+  const step = ctx.guided && node.type === 'agent'
   return (
     <div className="dsflow-form">
       <div className="dsflow-inspector__head">
-        <span className="dsflow-type-badge" data-node-type={node.type}>{t(`nodeType.${node.type}` as LocaleKey)}</span>
+        <span className="dsflow-type-badge" data-node-type={node.type}>{step ? t('guided.step') : t(`nodeType.${node.type}` as LocaleKey)}</span>
         <input className="dsflow-input dsflow-inspector__title" aria-label={t('title')} value={node.title} maxLength={200} onChange={(event) => { onChange({ ...node, title: event.target.value }) }} />
       </div>
-      <div className="dsflow-hint">{t(`nodeHelp.${node.type}` as LocaleKey)}</div>
+      <div className="dsflow-hint">{step ? t('guided.stepHelp') : t(`nodeHelp.${node.type}` as LocaleKey)}</div>
       {issues.length > 0 && (
         <ul className="dsflow-issues">
           {issues.map((issue, index) => (
@@ -43,7 +44,7 @@ export function NodeInspector({ node, ctx, issues, onChange, onDelete }: NodeIns
         </ul>
       )}
       <NodeForm node={node} ctx={ctx} onChange={onChange} />
-      <ErrorPolicyForm node={node} t={t} onChange={onChange} />
+      {!ctx.guided && <ErrorPolicyForm node={node} t={t} onChange={onChange} />}
       <details className="dsflow-advanced">
         <summary>{t('moreSettings')}</summary>
         <label className="dsflow-field">

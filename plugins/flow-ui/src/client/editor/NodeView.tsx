@@ -15,11 +15,12 @@ import { portLabel, type RfNode } from './convert.ts'
 import { nodeSummary } from './summary.ts'
 import type { LocaleKey, Translate } from '../locales.ts'
 
-/** What node views need from the editor: the translator, the resize callback, and subflow names. */
-export const NodeViewContext = createContext<{ t: Translate; onResize(nodeId: string, size: { width: number; height: number }): void; flowName(flowId: string): string | undefined }>({
+/** What node views need from the editor: the translator, the resize callback, subflow names, and the flow kind. */
+export const NodeViewContext = createContext<{ t: Translate; onResize(nodeId: string, size: { width: number; height: number }): void; flowName(flowId: string): string | undefined; guided: boolean }>({
   t: key => key,
   onResize: () => {},
   flowName: () => undefined,
+  guided: false,
 })
 
 function Summary({ node }: { node: FlowNode }): ReactNode {
@@ -31,7 +32,8 @@ function Summary({ node }: { node: FlowNode }): ReactNode {
 
 function Header({ node, t, overlay }: { node: FlowNode; t: Translate; overlay: RfNode['data']['overlay'] }): ReactNode {
   const errors = overlay.issues.filter(issue => issue.severity === 'error')
-  const typeName = t(`nodeType.${node.type}` as LocaleKey)
+  const { guided } = useContext(NodeViewContext)
+  const typeName = guided && node.type === 'agent' ? t('guided.step') : t(`nodeType.${node.type}` as LocaleKey)
   return (
     <div className="dsflow-node__head">
       <span className="dsflow-node__dot" />

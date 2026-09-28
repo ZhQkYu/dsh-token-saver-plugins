@@ -119,12 +119,22 @@ export function NumberField({ value, min, max, step, placeholder, onChange }: { 
   )
 }
 
-/** A typed literal value editor; JSON types keep local text until it parses. */
-export function LiteralEditor({ schema, value, t, multiline = false, onChange }: { schema: VarSchema; value: JsonValue; t: Translate; multiline?: boolean; onChange(value: JsonValue): void }): ReactNode {
+/** A typed literal value editor; JSON types keep local text until it parses, and `choices` renders a dropdown. */
+export function LiteralEditor({ schema, value, t, multiline = false, choices, onChange }: { schema: VarSchema; value: JsonValue; t: Translate; multiline?: boolean; choices?: readonly string[]; onChange(value: JsonValue): void }): ReactNode {
   const json = schema.type === 'object' || schema.type === 'array' || (schema.type === 'any' && value !== null && typeof value !== 'string')
   const [text, setText] = useState(() => JSON.stringify(value ?? null, null, 2))
   const [error, setError] = useState('')
   useEffect(() => { if (json) { setText(JSON.stringify(value ?? null, null, 2)); setError('') } }, [json, value])
+  if (choices !== undefined && choices.length > 0) {
+    const current = typeof value === 'string' ? value : ''
+    return (
+      <select className="dsflow-input" value={current} onChange={(event) => { onChange(event.target.value) }}>
+        <option value="" disabled>{t('value.choose')}</option>
+        {current !== '' && !choices.includes(current) && <option value={current}>{current}</option>}
+        {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+      </select>
+    )
+  }
   if (schema.type === 'boolean') {
     return (
       <Segmented
@@ -191,13 +201,14 @@ function VariableOptions({ options, t }: { options: readonly VariableOption[]; t
  * chosen from one dropdown. `onChange` passes the referenced variable's
  * schema when a variable is picked.
  */
-export function ValuePicker({ value, schema, options, t, literal = true, multiline = false, literalExtra, onChange }: {
+export function ValuePicker({ value, schema, options, t, literal = true, multiline = false, choices, literalExtra, onChange }: {
   value: ValueSource
   schema: VarSchema
   options: readonly VariableOption[]
   t: Translate
   literal?: boolean
   multiline?: boolean
+  choices?: readonly string[]
   literalExtra?: ReactNode
   onChange(value: ValueSource, schema?: VarSchema): void
 }): ReactNode {
@@ -222,7 +233,7 @@ export function ValuePicker({ value, schema, options, t, literal = true, multili
       </select>
       {literal && value.kind === 'literal' && (
         <div className="dsflow-value__literal">
-          <LiteralEditor schema={schema} value={value.value} t={t} multiline={multiline} onChange={(next) => { onChange({ kind: 'literal', value: next }) }} />
+          <LiteralEditor schema={schema} value={value.value} t={t} multiline={multiline} {...(choices === undefined ? {} : { choices })} onChange={(next) => { onChange({ kind: 'literal', value: next }) }} />
           {literalExtra}
         </div>
       )}
@@ -256,7 +267,7 @@ export function AddFromVariable({ label, literalLabel, options, t, onPick }: { l
  * Named inputs: each row is a name and a value picker. `fixed` rows keep
  * their names and types (tool parameters, subflow inputs).
  */
-export function BindingsEditor({ bindings, options, t, onChange, fixed = false, removable = true, describe, addLabel }: {
+export function BindingsEditor({ bindings, options, t, onChange, fixed = false, removable = true, describe, choices, addLabel }: {
   bindings: readonly InputBinding[]
   options: readonly VariableOption[]
   t: Translate
@@ -264,6 +275,8 @@ export function BindingsEditor({ bindings, options, t, onChange, fixed = false, 
   fixed?: boolean
   removable?: boolean | ((binding: InputBinding) => boolean)
   describe?: (binding: InputBinding) => string | undefined
+  /** Fixed choices for a binding's typed-in value (e.g. a tool parameter's enum). */
+  choices?: (binding: InputBinding) => readonly string[] | undefined
   addLabel?: string
 }): ReactNode {
   const update = (index: number, patch: Partial<InputBinding>): void => {
@@ -282,6 +295,7 @@ export function BindingsEditor({ bindings, options, t, onChange, fixed = false, 
               schema={binding.schema}
               options={options}
               t={t}
+              {...(choices?.(binding) === undefined ? {} : { choices: choices(binding) })}
               literalExtra={fixed ? undefined : <TypeSelect schema={binding.schema} t={t} onChange={(schema) => { update(index, { schema, value: literalFor(schema) }) }} />}
               onChange={(value, schema) => { update(index, fixed || schema === undefined ? { value } : { value, schema }) }}
             />

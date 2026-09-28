@@ -64,7 +64,7 @@ export function FlowPage({ t }: FlowPageProps): ReactNode {
       flows={flows}
       loading={loading}
       error={error}
-      onCreate={(name) => { api.create(name, '').then(flow => open(flow.id)).catch((caught: unknown) => { setError(errorText(caught)) }) }}
+      onCreate={(name, kind) => { api.create(name, '', kind).then(flow => open(flow.id)).catch((caught: unknown) => { setError(errorText(caught)) }) }}
       onOpen={(id) => { void open(id) }}
       onDuplicate={(id) => { run(() => api.duplicate(id)) }}
       onDelete={(id) => { run(() => api.remove(id)) }}

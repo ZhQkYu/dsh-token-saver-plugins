@@ -15,7 +15,7 @@ import {
   AddButton, AddFromVariable, BindingsEditor, FieldListEditor, InlineTemplate, KeyValueList, LiteralEditor, ModelSelect,
   NumberField, RemoveButton, Section, Segmented, TemplateField, TypeSelect, ValuePicker,
 } from './fields.tsx'
-import { bodyOutputOptions, literalFor, sourceKey, syncSubflowInputs, syncToolArgs, toolParams, variableOptions, type VariableOption } from './variables.ts'
+import { bodyOutputOptions, literalFor, sourceKey, syncSubflowInputs, syncToolArgs, toolParamChoices, toolParams, variableOptions, type VariableOption } from './variables.ts'
 
 /** What the forms need besides the node. */
 export interface FormContext {
@@ -25,6 +25,8 @@ export interface FormContext {
   tools: ToolSummary[] | undefined
   models: ModelCatalog | undefined
   flows: CatalogFlow[]
+  /** Whether the flow is guided: forms edit instructions for a model instead of engine settings. */
+  guided: boolean
 }
 
 type NodeOf<T extends FlowNode['type']> = Extract<FlowNode, { type: T }>
@@ -39,6 +41,15 @@ interface FormProps<T extends FlowNode['type']> {
 /** The settings form for a node. */
 export function NodeForm({ node, ctx, onChange }: { node: FlowNode; ctx: FormContext; onChange(next: FlowNode): void }): ReactNode {
   const options = useMemo(() => variableOptions(ctx.doc, node.id, ctx.lookup), [ctx.doc, ctx.lookup, node.id])
+  if (ctx.guided) {
+    switch (node.type) {
+      case 'end': return <GuidedEndForm node={node} ctx={ctx} options={options} onChange={onChange} />
+      case 'agent': return <GuidedStepForm node={node} ctx={ctx} options={options} onChange={onChange} />
+      case 'condition': return <GuidedConditionForm node={node} ctx={ctx} options={options} onChange={onChange} />
+      case 'loop': return <GuidedLoopForm node={node} ctx={ctx} options={options} onChange={onChange} />
+      default: break
+    }
+  }
   switch (node.type) {
     case 'start': return <StartForm node={node} ctx={ctx} options={options} onChange={onChange} />
     case 'end': return <EndForm node={node} ctx={ctx} options={options} onChange={onChange} />
@@ -479,6 +490,7 @@ function ToolForm({ node, ctx, options, onChange }: FormProps<'tool'>): ReactNod
                   fixed
                   removable={binding => binding.required === false}
                   describe={binding => params.find(param => param.name === binding.name)?.description}
+                  choices={binding => tool === undefined ? undefined : toolParamChoices(tool.parameters, binding.name)}
                   onChange={(args) => { onChange({ ...node, data: { ...data, args: syncToolArgs(params, args) } }) }}
                 />
                 {optional.length > 0 && (
@@ -865,6 +877,99 @@ function MessageForm({ node, ctx, options, onChange }: FormProps<'message'>): Re
 function CommentForm({ node, ctx, onChange }: FormProps<'comment'>): ReactNode {
   return (
     <textarea className="dsflow-textarea" placeholder={ctx.t('comment.placeholder')} value={node.data.text} onChange={(event) => { onChange({ ...node, data: { text: event.target.value } }) }} />
+  )
+}
+
+function GuidedStepForm({ node, ctx, options, onChange }: FormProps<'agent'>): ReactNode {
+  const { t } = ctx
+  const data = node.data
+  return (
+    <>
+      <TemplateField label={t('guided.instruction')} placeholder={t('guided.instructionPlaceholder')} value={data.prompt} bindings={data.inputs} options={options} t={t} onChange={(prompt, inputs) => { onChange({ ...node, data: { ...data, prompt, ...(inputs === undefined ? {} : { inputs }) } }) }} />
+      <Section title={t('inputs')} hint={t('guided.inputsHint')}>
+        <BindingsEditor bindings={data.inputs} options={options} t={t} onChange={(inputs) => { onChange({ ...node, data: { ...data, inputs } }) }} />
+      </Section>
+    </>
+  )
+}
+
+function GuidedConditionForm({ node, ctx, onChange }: FormProps<'condition'>): ReactNode {
+  const { t } = ctx
+  const branches = node.data.branches
+  const setBranches = (next: ConditionBranch[]): void => { onChange({ ...node, data: { branches: next } }) }
+  return (
+    <>
+      <div className="dsflow-hint">{t('guided.conditionHint')}</div>
+      <label className="dsflow-field">
+        <span className="dsflow-field__label">{t('guided.question')}</span>
+        <input className="dsflow-input" placeholder={t('guided.questionPlaceholder')} value={node.description ?? ''} onChange={(event) => { onChange({ ...node, description: event.target.value }) }} />
+      </label>
+      <div className="dsflow-list">
+        {branches.map((branch, index) => (
+          <div key={branch.id} className="dsflow-bind__row">
+            <span className="dsflow-card__index">{index === 0 ? t('condition.if') : t('condition.elseIf')}</span>
+            <input className="dsflow-input" placeholder={t('guided.branchPlaceholder')} value={branch.label} onChange={(event) => { setBranches(branches.map((current, i) => i === index ? { ...current, label: event.target.value } : current)) }} />
+            <RemoveButton t={t} onClick={() => { setBranches(branches.filter((_, i) => i !== index)) }} />
+          </div>
+        ))}
+        <AddButton label={t('condition.addBranch')} onClick={() => { setBranches([...branches, { id: newId('branch'), label: '', logic: 'and', conditions: [] }]) }} />
+      </div>
+      <div className="dsflow-card dsflow-card--else">
+        <span className="dsflow-card__index">{t('condition.else')}</span>
+        <span className="dsflow-hint">{t('condition.elseHint')}</span>
+      </div>
+    </>
+  )
+}
+
+function GuidedLoopForm({ node, ctx, options, onChange }: FormProps<'loop'>): ReactNode {
+  const { t } = ctx
+  const data = node.data
+  const set = (patch: Partial<NodeOf<'loop'>['data']>): void => { onChange({ ...node, data: { ...data, ...patch } }) }
+  return (
+    <>
+      <Section title={t('loop.mode')}>
+        <Segmented
+          value={data.mode}
+          options={[{ value: 'array', label: t('loop.mode.array') }, { value: 'count', label: t('loop.mode.count') }, { value: 'infinite', label: t('guided.untilMode') }]}
+          onChange={(mode) => { set({ mode }) }}
+        />
+        {data.mode === 'array' && <ValuePicker value={data.array ?? { kind: 'literal', value: [] }} schema={{ type: 'array' }} options={options} t={t} onChange={(array) => { set({ array }) }} />}
+        {data.mode === 'count' && <ValuePicker value={data.count ?? { kind: 'literal', value: 3 }} schema={{ type: 'integer' }} options={options} t={t} onChange={(count) => { set({ count }) }} />}
+      </Section>
+      <label className="dsflow-field">
+        <span className="dsflow-field__label">{t('guided.until')}</span>
+        <textarea className="dsflow-textarea dsflow-textarea--short" placeholder={t('guided.untilPlaceholder')} value={data.until ?? ''} onChange={(event) => { onChange({ ...node, data: withOptional(data, 'until', event.target.value === '' ? undefined : event.target.value) }) }} />
+      </label>
+      <label className="dsflow-field">
+        <span className="dsflow-field__label">{t('loop.maxIterations')}</span>
+        <NumberField value={data.maxIterations} min={1} onChange={(value) => { set({ maxIterations: value ?? 1 }) }} />
+      </label>
+      <div className="dsflow-hint">{t('guided.loopHint')}</div>
+    </>
+  )
+}
+
+function GuidedEndForm({ node, ctx, onChange }: FormProps<'end'>): ReactNode {
+  const { t } = ctx
+  const data = node.data
+  const fields: VarField[] = data.inputs.map(binding => ({ name: binding.name, schema: binding.schema }))
+  return (
+    <>
+      <label className="dsflow-field">
+        <span className="dsflow-field__label">{t('guided.result')}</span>
+        <textarea className="dsflow-textarea dsflow-textarea--short" placeholder={t('guided.resultPlaceholder')} value={data.template ?? ''} onChange={(event) => { onChange({ ...node, data: withOptional(data, 'template', event.target.value === '' ? undefined : event.target.value) }) }} />
+      </label>
+      <Section title={t('guided.resultFields')} hint={t('guided.resultFieldsHint')}>
+        <FieldListEditor
+          fields={fields}
+          t={t}
+          addLabel={t('addOutput')}
+          namePrefix="result"
+          onChange={(next) => { onChange({ ...node, data: { ...data, mode: 'variables', inputs: next.map(field => ({ name: field.name, schema: field.schema, value: { kind: 'literal', value: null }, required: false })) } }) }}
+        />
+      </Section>
+    </>
   )
 }
 

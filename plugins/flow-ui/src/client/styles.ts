@@ -104,6 +104,10 @@ export const PAGE_CSS = `
 .dsflow-dialog__title { font-size: 15px; font-weight: 600; }
 .dsflow-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dsflow-editor { position: relative; }
+.dsh-flow-kind { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 8px; }
+.dsflow-badge--guided { color: var(--dsw-alias-state-success-primary); }
+.dsflow-dialog__panel--wide { width: 720px; max-height: calc(100% - 48px); }
+.dsflow-pre--tall { max-height: 60vh; }
 
 [data-node-type="start"], [data-node-type="end"] { --dsflow-accent: var(--dsw-alias-brand-primary); }
 [data-node-type="llm"], [data-node-type="intent"], [data-node-type="agent"] { --dsflow-accent: #7c5cff; }

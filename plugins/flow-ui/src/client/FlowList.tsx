@@ -7,7 +7,9 @@
 
 import { useState, type ReactNode } from 'react'
 import { Button, IconPlusOutlineRegular, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { FlowKind } from '@dsh-plugins/flow/spec'
 import type { FlowSummary } from './api.ts'
+import { Segmented } from './editor/fields.tsx'
 import type { Translate } from './locales.ts'
 
 /** Props for {@link FlowList}. */
@@ -16,7 +18,7 @@ export interface FlowListProps {
   flows: FlowSummary[]
   loading: boolean
   error: string
-  onCreate(name: string): void
+  onCreate(name: string, kind: FlowKind): void
   onOpen(id: string): void
   onDuplicate(id: string): void
   onDelete(id: string): void
@@ -26,6 +28,7 @@ export interface FlowListProps {
 export function FlowList({ t, flows, loading, error, onCreate, onOpen, onDuplicate, onDelete }: FlowListProps): ReactNode {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [kind, setKind] = useState<FlowKind>('flow')
   const [confirming, setConfirming] = useState<string | undefined>(undefined)
 
   const create = (): void => {
@@ -33,7 +36,7 @@ export function FlowList({ t, flows, loading, error, onCreate, onOpen, onDuplica
     if (name === '') return
     setNewName('')
     setCreating(false)
-    onCreate(name)
+    onCreate(name, kind)
   }
 
   return (
@@ -56,6 +59,12 @@ export function FlowList({ t, flows, loading, error, onCreate, onOpen, onDuplica
             : <Button variant="primary" icon={<IconPlusOutlineRegular size={16} />} onClick={() => { setCreating(true) }}>{t('newFlow')}</Button>}
         </div>
       </div>
+      {creating && (
+        <div className="dsh-flow-kind">
+          <Segmented value={kind} options={[{ value: 'flow', label: t('kind.flow') }, { value: 'guided', label: t('kind.guided') }]} onChange={(next) => { setKind(next) }} />
+          <span className="dsflow-hint">{t(kind === 'flow' ? 'kind.flowHint' : 'kind.guidedHint')}</span>
+        </div>
+      )}
       {error !== '' && <div className="dsflow-error">{error}</div>}
       {loading
         ? <div className="dsh-flow-empty">{t('loading')}</div>
@@ -69,6 +78,7 @@ export function FlowList({ t, flows, loading, error, onCreate, onOpen, onDuplica
                     <div className="dsh-flow-row-name">{flow.name}{flow.broken === true ? ` (${t('broken')})` : ''}</div>
                     <div className="dsh-flow-row-desc">{flow.broken === true ? flow.reason : flow.description || `${flow.nodeCount} ${t('nodeCount')}`}</div>
                   </div>
+                  {flow.kind === 'guided' && <span className="dsflow-badge dsflow-badge--guided">{t('kind.guided')}</span>}
                   {flow.publishedVersion !== undefined && <span className="dsflow-badge">v{flow.publishedVersion}</span>}
                   {flow.toolName !== undefined && <span className="dsflow-badge">flow_{flow.toolName}</span>}
                   {flow.broken !== true && <Button variant="ghost" size="sm" onClick={(event) => { event.stopPropagation(); onDuplicate(flow.id) }}>{t('duplicate')}</Button>}

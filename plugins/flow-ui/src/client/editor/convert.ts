@@ -249,12 +249,13 @@ function widthOf(node: FlowNode): number {
  * would leave it invalid: one condition branch, one intent, a code input and output.
  * @param node - a node from {@link createNode}.
  * @param t - the translator for default labels.
+ * @param guided - whether the node goes into a guided flow, whose branches are described in words.
  * @returns the seeded node.
  */
-export function seedNode(node: FlowNode, t: Translate): FlowNode {
+export function seedNode(node: FlowNode, t: Translate, guided = false): FlowNode {
   switch (node.type) {
     case 'condition':
-      return { ...node, data: { branches: [{ id: newId('branch'), label: `${t('branch')} 1`, logic: 'and', conditions: [{ left: { kind: 'literal', value: '' }, op: 'eq', right: { kind: 'literal', value: '' } }] }] } }
+      return { ...node, data: { branches: [{ id: newId('branch'), label: `${t('branch')} 1`, logic: 'and', conditions: guided ? [] : [{ left: { kind: 'literal', value: '' }, op: 'eq', right: { kind: 'literal', value: '' } }] }] } }
     case 'intent':
       return { ...node, data: { ...node.data, intents: [{ id: newId('intent'), label: `${t('intent')} 1` }] } }
     case 'code':
