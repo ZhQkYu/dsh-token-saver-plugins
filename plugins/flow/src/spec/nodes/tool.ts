@@ -18,9 +18,9 @@ export const toolSpec: NodeSpec<ToolNode> = {
   defaults: () => ({ tool: '', args: [] }),
   hasInput: () => true,
   ports: () => [{ id: 'next', label: 'next', kind: 'next' }],
-  outputs: () => [
+  outputs: (node) => [
     { name: 'text', schema: { type: 'string' } },
-    { name: 'value', schema: { type: 'any' } },
+    { name: 'value', schema: node.data.outputs === undefined || node.data.outputs.length === 0 ? { type: 'any' } : { type: 'object', properties: node.data.outputs } },
   ],
   validate: (node, ctx): Issue[] => {
     const issues: Issue[] = []
@@ -28,7 +28,7 @@ export const toolSpec: NodeSpec<ToolNode> = {
       issues.push({ severity: 'error', code: 'REQUIRED_INPUT', message: 'tool name is required', nodeId: node.id, field: 'tool' })
     }
     const seen = new Set<string>()
-    for (const binding of node.data.args) {
+    for (const binding of [...node.data.args, ...(node.data.inputs ?? [])]) {
       if (!NAME_PATTERN.test(binding.name)) {
         issues.push({ severity: 'error', code: 'BAD_NAME', message: `tool arg "${binding.name}" is not a valid name`, nodeId: node.id, field: `args.${binding.name}` })
       }

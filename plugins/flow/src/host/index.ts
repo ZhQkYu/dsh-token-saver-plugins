@@ -21,6 +21,8 @@ import { registerCatalogRoutes } from './routes/catalog.ts'
 import { ToolCatalog } from './known-tools.ts'
 import { registerRunRoutes } from './routes/runs.ts'
 import { registerWorkflowTool } from './workflow-tool.ts'
+import type { DesignToolDeps } from './design-tool.ts'
+import type {} from './design-plugin.ts'
 import { LAUNCH_SESSION_SERVICES } from './session-launch.ts'
 import { resolveLimits, validateLimitsOf } from './limits.ts'
 
@@ -68,6 +70,14 @@ export function apply(ctx: Context, config: FlowConfig): void {
   registerRunRoutes(ctx, runStore, engine)
   registerWorkflowTool(ctx, flowStore, engine)
   flowTools.sync()
+  ctx.provide('flowDesign', {
+    flowStore,
+    runStore,
+    engine,
+    toolCatalog,
+    toolPrefix: config.tools.prefix,
+    limits: () => ({ ...validateLimitsOf(limits), toolNames: toolCatalog.names(), strictTools: false }),
+  } satisfies DesignToolDeps)
 
   ctx.effect(() => () => { void engine.dispose() }, 'dsh-flow engine teardown')
 }

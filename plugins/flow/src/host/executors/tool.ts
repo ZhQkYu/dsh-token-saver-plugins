@@ -5,7 +5,9 @@
  * @module @dsh-plugins/flow/host/executors/tool
  */
 
-import type { FlowNode } from '../../spec/types.ts'
+import type { FlowNode, JsonValue } from '../../spec/types.ts'
+import { renderTemplate } from '../../spec/template.ts'
+import { toolArgTemplates } from '../../spec/validate.ts'
 import { NodeError } from '../engine/budget.ts'
 import type { ExecResult, NodeExecutor } from './index.ts'
 
@@ -16,7 +18,12 @@ export const toolExecutor: NodeExecutor<ToolNode> = {
   type: 'tool',
   requires: ['agent'],
   async execute(node, inputs, ctx): Promise<ExecResult> {
-    const args = inputs
+    const args: Record<string, JsonValue> = {}
+    const templated = new Map(toolArgTemplates(node.data.args).map(entry => [entry.name, entry.template]))
+    for (const arg of node.data.args) {
+      const template = templated.get(arg.name)
+      args[arg.name] = template === undefined ? inputs[arg.name] ?? null : renderTemplate(template, inputs).text
+    }
     const binding = await ctx.agent()
     const result = await ctx.services.tools.execute({
       callId: ctx.nextCallId(),

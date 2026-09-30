@@ -7,7 +7,7 @@
  */
 
 import type { FlowDocument, FlowLookup, InputBinding, JsonValue, ValueSource, VarField, VarSchema } from '@dsh-plugins/flow/spec'
-import { availableVariables, defaultValue, jsonSchemaToVarSchema, specOf, uniqueName } from '@dsh-plugins/flow/spec'
+import { NAME_PATTERN, availableVariables, defaultValue, formatPath, jsonSchemaToVarSchema, specOf, uniqueName } from '@dsh-plugins/flow/spec'
 
 /** A reference value source. */
 export type RefSource = Extract<ValueSource, { kind: 'ref' }>
@@ -23,11 +23,16 @@ export interface VariableOption {
   schema: VarSchema
 }
 
-const MAX_FIELD_DEPTH = 2
+const MAX_FIELD_DEPTH = 4
 
 function pushField(options: VariableOption[], group: string, label: string, source: RefSource, schema: VarSchema, depth: number): void {
   options.push({ key: sourceKey(source), group, label, source, schema })
-  if (schema.type !== 'object' || depth >= MAX_FIELD_DEPTH) return
+  if (depth >= MAX_FIELD_DEPTH) return
+  if (schema.type === 'array' && schema.items !== undefined && (schema.items.type === 'object' || schema.items.type === 'array')) {
+    pushField(options, group, `${label}[0]`, { ...source, path: [...source.path, '0'] }, schema.items, depth + 1)
+    return
+  }
+  if (schema.type !== 'object') return
   for (const property of schema.properties ?? []) {
     pushField(options, group, `${label}.${property.name}`, { ...source, path: [...source.path, property.name] }, property.schema, depth + 1)
   }
@@ -94,11 +99,20 @@ export function sourceKey(source: ValueSource): string {
  * @param option - the picked variable.
  * @returns the binding and whether it is new.
  */
-export function bindingForOption(bindings: readonly InputBinding[], option: VariableOption): { binding: InputBinding; added: boolean } {
+export function bindingForOption(bindings: readonly InputBinding[], option: VariableOption): { binding: InputBinding; added: boolean; expr: string } {
   const existing = bindings.find(binding => sourceKey(binding.value) === option.key)
-  if (existing !== undefined) return { binding: existing, added: false }
-  const name = uniqueName(option.source.path[option.source.path.length - 1] ?? 'value', new Set(bindings.map(binding => binding.name)))
-  return { binding: { name, schema: option.schema, value: option.source }, added: true }
+  if (existing !== undefined) return { binding: existing, added: false, expr: existing.name }
+  // Reuse a binding that references an ancestor of the picked field: `{{user.address.city}}`.
+  const target = option.source
+  for (const binding of bindings) {
+    const value = binding.value
+    if (value.kind !== 'ref' || value.node !== target.node || value.source !== target.source || value.path.length >= target.path.length) continue
+    if (!value.path.every((segment, i) => target.path[i] === segment)) continue
+    return { binding, added: false, expr: formatPath([binding.name, ...target.path.slice(value.path.length)]) }
+  }
+  const base = [...target.path].reverse().find(segment => !/^\d+$/.test(segment)) ?? 'value'
+  const name = uniqueName(NAME_PATTERN.test(base) ? base : 'value', new Set(bindings.map(binding => binding.name)))
+  return { binding: { name, schema: option.schema, value: option.source }, added: true, expr: name }
 }
 
 /**
@@ -113,6 +127,17 @@ export function insertText(text: string, start: number, end: number, snippet: st
   const from = Math.max(0, Math.min(start, text.length))
   const to = Math.max(from, Math.min(end, text.length))
   return { text: text.slice(0, from) + snippet + text.slice(to), cursor: from + snippet.length }
+}
+
+/**
+ * The fields of a tool's declared output `value` schema.
+ * @param output - the tool's output JSON Schema, if any.
+ * @returns one field per property; empty when the output is not an object.
+ */
+export function toolOutputFields(output: unknown): VarField[] {
+  if (output === null || output === undefined) return []
+  const schema = jsonSchemaToVarSchema(output)
+  return schema.type === 'object' ? schema.properties ?? [] : []
 }
 
 /**

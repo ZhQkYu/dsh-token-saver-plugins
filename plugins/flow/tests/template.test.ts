@@ -17,6 +17,14 @@ describe('parseTemplate', () => {
     expect(parseTemplate('\\{{name}}')).toEqual([{ kind: 'text', text: '{{name}}' }])
   })
 
+  it('escapes \\{{ in the middle of text', () => {
+    expect(parseTemplate('a\\{{x}} {{y}}')).toEqual([
+      { kind: 'text', text: 'a{{x}} ' },
+      { kind: 'var', path: ['y'] },
+    ])
+    expect([...templateVariables('a\\{{x}}')]).toEqual([])
+  })
+
   it('treats an unclosed placeholder as literal text', () => {
     expect(parseTemplate('x {{y')).toEqual([{ kind: 'text', text: 'x {{y' }])
   })

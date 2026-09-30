@@ -5,12 +5,13 @@
   "type": "module",
   "description": "Coze-style deterministic workflow engine for DSH: typed variables, data flow, control flow, and workflows exposed as tools",
   "exports": {
-    ".": "./lib/host/index.js",
+    ".": { "types": "./lib/host/index.d.ts", "default": "./lib/host/index.js" },
+    "./design": { "types": "./lib/host/design-plugin.d.ts", "default": "./lib/host/design-plugin.js" },
     "./spec": { "types": "./lib/spec/index.d.ts", "default": "./lib/spec/index.js" },
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "dsh": { "bundle": { "patch": ["./cordis.patch.yml", "./presets/flow-designer.patch.yml"] } },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -39,6 +40,7 @@
     "@deepseek-ai/dsh-sandbox-policy": "*",
     "@deepseek-ai/dsh-sandbox": "*",
     "@deepseek-ai/dsh-subagent": "*",
-    "@deepseek-ai/dsh-user-questions": "*"
+    "@deepseek-ai/dsh-user-questions": "*",
+    "@deepseek-ai/dsh-skill": "*"
   }
 }

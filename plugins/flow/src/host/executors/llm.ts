@@ -53,7 +53,8 @@ export const llmExecutor: NodeExecutor<LlmNode> = {
           else if (chunk.type === 'usage') usage = chunk.usage
         }
       } catch (error: unknown) {
-        throw new NodeError('LLM_STREAM', error instanceof Error ? error.message : String(error))
+        // Provider failures (rate limits, 5xx, dropped streams) are usually transient; onError.retries bounds them.
+        throw new NodeError('LLM_STREAM', error instanceof Error ? error.message : String(error), true)
       }
       if (assembler.finish.kind !== 'stop') {
         throw new NodeError(`LLM_FINISH_${assembler.finish.kind.toUpperCase()}`, `model finished with ${assembler.finish.kind}`)

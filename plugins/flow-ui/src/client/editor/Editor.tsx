@@ -14,16 +14,20 @@ import {
 } from '@xyflow/react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { FlowDocument, FlowLookup, FlowNode, Issue, JsonValue, NodeType, RunView, ValidateLimits } from '@dsh-plugins/flow/spec'
-import { GUIDED_NODE_TYPES, NODE_SPECS, guidedPrompt, validateFlow } from '@dsh-plugins/flow/spec'
+import { GUIDED_NODE_TYPES, NODE_SPECS, guidedPrompt, isDebuggable, validateFlow } from '@dsh-plugins/flow/spec'
 import { api, errorText, ApiError, startFieldsOf, type CatalogFlow, type FlowMeta, type ModelCatalog, type ToolSummary } from '../api.ts'
 import { addNodeAfter, addNodeAt, addNodeInside, autoLayout, canConnect, connect, createNode, moveNode, newId, removeEdges, removeNodeAndReconnect, removeNodes, replaceNode, resizeNode, seedNode, toRfEdges, toRfNodes, type NodeOverlay, type RfNode } from './convert.ts'
 import { CommentNodeView, ContainerNodeView, FlowNodeView, NodeViewContext } from './NodeView.tsx'
+import { DeletableEdge } from './DeletableEdge.tsx'
 import { NodeInspector } from './forms.tsx'
 import { issueField, issueText } from './issues.ts'
 import type { FormContext } from './node-forms.tsx'
 import { PublishDialog, type PublishRequest } from './PublishDialog.tsx'
 import { syncToolArgs, toolParams } from './variables.ts'
 import { RunPanel } from '../run/RunPanel.tsx'
+import { Resizer, usePanelSize } from './Resizer.tsx'
+import { NodeRunSection } from '../run/NodeRunDetail.tsx'
+import { NodeDebugPanel } from '../run/NodeDebugPanel.tsx'
 import type { LocaleKey, Translate } from '../locales.ts'
 
 /** A palette entry: a node type, or the web AI preset (a `tool` node calling `web_ai_ask`). */
@@ -46,6 +50,7 @@ const PALETTE: { category: LocaleKey; types: PaletteItem[] }[] = [
 const LOOP_ONLY: ReadonlySet<NodeType> = new Set(['break', 'continue', 'assign'])
 
 const NODE_TYPES_RF = { flow: FlowNodeView, container: ContainerNodeView, comment: CommentNodeView }
+const EDGE_TYPES_RF = { deletable: DeletableEdge }
 const DRAG_MIME = 'application/x-dsh-flow-node'
 const AUTOSAVE_MS = 1500
 
@@ -76,6 +81,12 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   const canvasRef = useRef<HTMLDivElement>(null)
   const [limits, setLimits] = useState<ValidateLimits>({})
   const [runView, setRunView] = useState<RunView | undefined>(undefined)
+  const paletteSize = usePanelSize('dsh-flow.layout.palette', 150, 110, 320)
+  const sideSize = usePanelSize('dsh-flow.layout.side', 380, 260, 900)
+  const bottomSize = usePanelSize('dsh-flow.layout.bottom', 260, 80, 900)
+  /** The side panel tab; a run switches it to the selected node's results. */
+  const [sideTab, setSideTab] = useState<'config' | 'run' | 'debug'>('config')
+  useEffect(() => { if (runView !== undefined) setSideTab('run') }, [runView?.runId])
   const [hostIssues, setHostIssues] = useState<Issue[]>([])
   const [meta, setMeta] = useState(initialMeta)
   const [publishing, setPublishing] = useState<{ busy: boolean; error: string } | undefined>(undefined)
@@ -200,7 +211,17 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   }, [runView])
 
   const [rfNodes, setRfNodes] = useNodesState<RfNode>([])
-  useEffect(() => { setRfNodes(toRfNodes(doc, overlays, selectedId)) }, [doc, overlays, selectedId, setRfNodes])
+  // Carry React Flow's measured size across rebuilds: a node without `measured` stays hidden until its
+  // ResizeObserver fires, which never happens when its size is unchanged.
+  useEffect(() => {
+    setRfNodes((previous) => {
+      const measured = new Map(previous.map(node => [node.id, node.measured]))
+      return toRfNodes(doc, overlays, selectedId).map((node) => {
+        const size = measured.get(node.id)
+        return size === undefined ? node : { ...node, measured: size }
+      })
+    })
+  }, [doc, overlays, selectedId, setRfNodes])
   const rfEdges = useMemo(() => toRfEdges(doc, fired, t), [doc, fired, t])
 
   const onNodesChange = useCallback((changes: NodeChange<RfNode>[]): void => {
@@ -313,7 +334,15 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
   const selectedNode = doc.nodes.find(node => node.id === selectedId)
   const flowName = useCallback((flowId: string) => catalog.find(entry => entry.id === flowId)?.name, [catalog])
   const nodeViewContext = useMemo(() => ({ t, flowName, guided, onResize: (nodeId: string, size: { width: number; height: number }) => { commit(resizeNode(docRef.current, nodeId, size)) } }), [t, commit, flowName, guided])
-  const formContext = useMemo<FormContext>(() => ({ doc, lookup, t, tools, models, flows: catalog, guided }), [doc, lookup, t, tools, models, catalog, guided])
+  const lastOutputs = useCallback((nodeId: string): Record<string, JsonValue> | undefined => {
+    const runs = runView?.nodes.filter(node => node.nodeId === nodeId && node.outputs !== undefined) ?? []
+    return runs[runs.length - 1]?.outputs as Record<string, JsonValue> | undefined
+  }, [runView])
+  const lastInputs = useCallback((nodeId: string): Record<string, JsonValue> | undefined => {
+    const runs = runView?.nodes.filter(node => node.nodeId === nodeId && node.inputs !== null && typeof node.inputs === 'object' && !Array.isArray(node.inputs)) ?? []
+    return runs[runs.length - 1]?.inputs as Record<string, JsonValue> | undefined
+  }, [runView])
+  const formContext = useMemo<FormContext>(() => ({ doc, lookup, t, tools, models, flows: catalog, guided, lastOutputs }), [doc, lookup, t, tools, models, catalog, guided, lastOutputs])
   const palette = useMemo(() => PALETTE.map(group => ({
     ...group,
     types: group.types.filter(item => item === 'webai'
@@ -348,7 +377,7 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
           <span className={errorCount > 0 ? 'dsflow-error' : 'dsflow-muted'}>{issues.length} {t('issues')}</span>
           {guided && <span className="dsflow-badge dsflow-badge--guided" title={t('kind.guidedHint')}>{t('kind.guided')}</span>}
           {guided && <Button variant="outline" size="sm" onClick={() => { setPreview(true) }}>{t('guided.preview')}</Button>}
-          <Button variant="outline" size="sm" onClick={() => { commit(autoLayout(docRef.current)); setTimeout(() => { void flowApi.fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.6, duration: 200 }) }, 50) }}>{t('layout')}</Button>
+          <Button variant="outline" size="sm" onClick={() => { commit(autoLayout(docRef.current)); setTimeout(() => { void flowApi.fitView({ padding: 0.1, maxZoom: 1, minZoom: 0.1, duration: 200 }) }, 50) }}>{t('layout')}</Button>
           <Button variant="outline" size="sm" onClick={() => { void flush() }}>{t('save')}</Button>
           <Button variant="primary" size="sm" onClick={() => { setPublishing({ busy: false, error: '' }) }}>{t('publish')}</Button>
         </div>
@@ -360,7 +389,7 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
           </div>
         )}
         <div className="dsflow-editor__body">
-          <div className="dsflow-palette">
+          <div className="dsflow-palette" style={{ width: paletteSize.size }}>
             <div className="dsflow-muted dsflow-palette__hint">{t('palette.hint')}</div>
             {palette.map(group => (
               <div key={group.category} className="dsflow-palette__category">
@@ -383,11 +412,13 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
               </div>
             ))}
           </div>
+          <Resizer axis="x" sign={1} onResize={paletteSize.resize} onReset={paletteSize.reset} label={t('layout.resize')} />
           <div ref={canvasRef} className="dsflow-editor__canvas" onDrop={onDrop} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}>
             <ReactFlow<RfNode>
               nodes={rfNodes}
               edges={rfEdges}
               nodeTypes={NODE_TYPES_RF}
+              edgeTypes={EDGE_TYPES_RF}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
@@ -396,28 +427,44 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
               deleteKeyCode={['Backspace', 'Delete']}
               connectionRadius={36}
               fitView
-              fitViewOptions={{ maxZoom: 1, minZoom: 0.75, padding: 0.2 }}
+              minZoom={0.1}
+              maxZoom={2}
+              fitViewOptions={{ maxZoom: 1, minZoom: 0.1, padding: 0.1 }}
             >
               <Background />
               <Controls />
               <MiniMap pannable zoomable />
             </ReactFlow>
           </div>
-          <div className="dsflow-editor__side">
+          <Resizer axis="x" sign={-1} onResize={sideSize.resize} onReset={sideSize.reset} label={t('layout.resize')} />
+          <div className="dsflow-editor__side" style={{ width: sideSize.size }}>
+            {selectedNode !== undefined && (runView !== undefined || isDebuggable(selectedNode)) && (
+              <div className="dsflow-tabs" role="tablist">
+                <button type="button" role="tab" aria-selected={sideTab === 'config'} className="dsflow-tab" onClick={() => { setSideTab('config') }}>{t('trace.tabConfig')}</button>
+                {runView !== undefined && <button type="button" role="tab" aria-selected={sideTab === 'run'} className="dsflow-tab" onClick={() => { setSideTab('run') }}>{t('trace.tabRun')}</button>}
+                {isDebuggable(selectedNode) && <button type="button" role="tab" aria-selected={sideTab === 'debug'} className="dsflow-tab" onClick={() => { setSideTab('debug') }}>{t('debug.tab')}</button>}
+              </div>
+            )}
             {selectedNode === undefined
               ? <EmptyInspector t={t} />
-              : (
-                <NodeInspector
-                  key={selectedNode.id}
-                  node={selectedNode}
-                  ctx={formContext}
-                  issues={issues.filter(issue => issue.nodeId === selectedNode.id)}
-                  onChange={next => { commit(replaceNode(docRef.current, next)) }}
-                  onDelete={() => { commit(removeNodeAndReconnect(docRef.current, selectedNode.id, newId('edge'))); setSelectedId(undefined) }}
-                />
-              )}
+              : sideTab === 'debug' && isDebuggable(selectedNode)
+                ? <NodeDebugPanel key={selectedNode.id} doc={doc} node={selectedNode} t={t} workspaceId={localStorage.getItem('dsh-flow.workspace') ?? ''} lastInputs={lastInputs(selectedNode.id)} />
+                : runView !== undefined && sideTab === 'run'
+                ? <NodeRunSection key={selectedNode.id} nodeId={selectedNode.id} view={runView} doc={doc} t={t} />
+                : (
+                  <NodeInspector
+                    key={selectedNode.id}
+                    node={selectedNode}
+                    ctx={formContext}
+                    issues={issues.filter(issue => issue.nodeId === selectedNode.id)}
+                    onChange={next => { commit(replaceNode(docRef.current, next)) }}
+                    onDelete={() => { commit(removeNodeAndReconnect(docRef.current, selectedNode.id, newId('edge'))); setSelectedId(undefined) }}
+                  />
+                )}
           </div>
         </div>
+        <Resizer axis="y" sign={-1} onResize={bottomSize.resize} onReset={bottomSize.reset} label={t('layout.resize')} />
+        <div className="dsflow-editor__bottom" style={{ height: bottomSize.size }}>
         <div className="dsflow-editor__problems">
           {issues.length === 0
             ? <span className="dsflow-muted">{t('noIssues')}</span>
@@ -438,6 +485,7 @@ export function Editor({ flow, meta: initialMeta, t, onBack }: EditorProps): Rea
             ))}
         </div>
         <RunPanel doc={doc} t={t} beforeRun={flush} onView={setRunView} onIssues={setHostIssues} />
+        </div>
         {publishing !== undefined && (
           <PublishDialog t={t} meta={meta} busy={publishing.busy} error={publishing.error} onSubmit={(request) => { void publish(request) }} onCancel={() => { setPublishing(undefined) }} />
         )}

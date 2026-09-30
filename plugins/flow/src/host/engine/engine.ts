@@ -21,6 +21,7 @@ import { coerce } from '../../spec/coerce.ts'
 import { iterBindings, iterTemplates, validateFlow } from '../../spec/validate.ts'
 import { specOf } from '../../spec/nodes/index.ts'
 import { templateVariables } from '../../spec/template.ts'
+import { isDebuggable } from '../../spec/debug.ts'
 import { FLOW_WORKFLOW_TOOL, flowInterface, flowKind, guidedPrompt } from '../../spec/guided.ts'
 import { compile, FlowValidationError, type ExecutionPlan } from './compile.ts'
 import { classifyRunAbort, runFlow, runContainerFrame, runScopeFrame, RunAbort, Semaphore, type RunContext, type RunEmitter, type RunResult } from './scheduler.ts'
@@ -368,15 +369,15 @@ export class FlowEngine {
    * Run a single node with literal inputs (debug). Only the target node is
    * validated; its inputs are the request's literals coerced by binding schema.
    */
-  async debug(flow: FlowDocument, nodeId: string, rawInputs: JsonValue, workspaceId: string): Promise<{ runId: string }> {
+  async debug(flow: FlowDocument, nodeId: string, rawInputs: JsonValue, workspace: string | { path: string }): Promise<{ runId: string }> {
     const node = flow.nodes.find(n => n.id === nodeId)
     if (node === undefined) throw new RunStartError('NODE_NOT_FOUND', `node ${nodeId} not found`, 404)
     const executor = this.executors[node.type]
-    if (executor === undefined || NON_DEBUGGABLE.has(node.type)) throw new RunStartError('DEBUG_UNSUPPORTED', `${node.type} nodes cannot be run on their own`)
+    if (executor === undefined || !isDebuggable(node)) throw new RunStartError('DEBUG_UNSUPPORTED', `${node.type} nodes cannot be run on their own`)
     const issues = validateSingleNode(flow, node, this.flowStore.lookup).filter(issue => issue.severity === 'error')
     if (issues.length > 0) throw new FlowValidationError(issues)
     this.checkServiceAvailability({ ...flow, nodes: [node] }, false)
-    const workspacePath = this.resolveWorkspace(workspaceId, undefined)
+    const workspacePath = typeof workspace === 'string' ? this.resolveWorkspace(workspace, undefined) : workspace.path
     const inputs = coerceDebugInputs(node, rawInputs)
 
     // A one-node synthetic plan runs through the same scheduler path: retries, timeouts, signals, and recording.
@@ -666,6 +667,7 @@ export class FlowEngine {
       ['dispose run session', () => live.agentManager.dispose()],
       ['dispose interaction', () => { this.interactions.get(live.runId)?.dispose(); this.interactions.delete(live.runId) }],
       ['prune runs', () => { this.runStore.prune(live.flowId) }],
+      ['release event tracking', () => { this.runStore.releaseRun(live.runId) }],
     ]
     for (const [label, step] of steps) {
       try {
@@ -825,9 +827,6 @@ export class FlowEngine {
   }
 }
 
-/** Node types that only make sense inside a whole flow. */
-const NON_DEBUGGABLE = new Set<FlowNode['type']>(['start', 'end', 'comment', 'break', 'continue', 'assign', 'loop', 'batch', 'subflow'])
-
 /** Validate one node in isolation: its own rules and template variables, not the graph around it. */
 function validateSingleNode(flow: FlowDocument, node: FlowNode, lookup: FlowLookup): Issue[] {
   const issues = specOf(node).validate(node, { doc: flow, lookup })
@@ -840,11 +839,16 @@ function validateSingleNode(flow: FlowDocument, node: FlowNode, lookup: FlowLook
   return issues
 }
 
-/** Replace a debug node's binding sources with the request's literal values so resolution never looks outside the node. */
+/**
+ * Replace a debug node's binding sources with the request's values so resolution never looks outside the node.
+ * A literal binding the request does not override keeps its configured value.
+ */
 function withLiteralInputs(node: FlowNode, inputs: Record<string, JsonValue>): FlowNode {
-  const literal = (binding: InputBinding): InputBinding => ({ ...binding, value: { kind: 'literal', value: inputs[binding.name] ?? null } })
+  const literal = (binding: InputBinding): InputBinding => binding.value.kind === 'literal' && !(binding.name in inputs)
+    ? binding
+    : { ...binding, value: { kind: 'literal', value: inputs[binding.name] ?? null } }
   switch (node.type) {
-    case 'tool': return { ...node, data: { ...node.data, args: node.data.args.map(literal) } }
+    case 'tool': return { ...node, data: { ...node.data, args: node.data.args.map(literal), ...(node.data.inputs === undefined ? {} : { inputs: node.data.inputs.map(literal) }) } }
     case 'text': return node.data.op === 'concat' ? { ...node, data: { ...node.data, inputs: node.data.inputs.map(literal) } } : node
     case 'llm': return { ...node, data: { ...node.data, inputs: node.data.inputs.map(literal) } }
     case 'intent': return { ...node, data: { ...node.data, inputs: node.data.inputs.map(literal) } }
@@ -857,12 +861,13 @@ function withLiteralInputs(node: FlowNode, inputs: Record<string, JsonValue>): F
   }
 }
 
-/** Coerce debug inputs by the node's binding schemas. */
+/** Coerce debug inputs by the node's binding schemas; an omitted literal binding keeps its configured value. */
 function coerceDebugInputs(node: FlowNode, raw: JsonValue): Record<string, JsonValue> {
   const source = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
   const out: Record<string, JsonValue> = {}
   for (const binding of iterBindings(node)) {
     const value = source[binding.name]
+    if (value === undefined && binding.value.kind === 'literal') continue
     if (value === undefined || value === null) {
       if (binding.required ?? true) throw new InputValidationError(`inputs.${binding.name}`, 'INPUT_INVALID', `required input "${binding.name}" is missing`)
       out[binding.name] = null

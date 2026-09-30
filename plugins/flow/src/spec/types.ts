@@ -193,12 +193,21 @@ export interface HttpData {
   query: { name: string; value: string }[]
   body: { kind: 'none' } | { kind: 'json' | 'text'; template: string } | { kind: 'form'; fields: { name: string; value: string }[] }
   timeoutMs?: number
+  /** Declared fields of the parsed JSON response; shapes the `json` output for downstream pickers. */
+  outputs?: VarField[]
 }
 
 /** Tool node data. */
 export interface ToolData {
   tool: string
   args: InputBinding[]
+  /**
+   * Extra variables that literal string args may reference as `{{name}}`
+   * templates; they are not sent to the tool.
+   */
+  inputs?: InputBinding[]
+  /** Declared fields of the tool's structured `value`; shapes it for downstream pickers. */
+  outputs?: VarField[]
 }
 
 /** Text node data. */

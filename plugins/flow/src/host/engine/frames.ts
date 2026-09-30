@@ -6,6 +6,7 @@
  */
 
 import type { FrameStep, JsonValue, ValueSource } from '../../spec/types.ts'
+import { stepPath } from '../../spec/template.ts'
 import type { ExecutionPlan } from './compile.ts'
 
 /** The lifecycle state of a node within a frame. */
@@ -75,8 +76,8 @@ function findNodeInChain(frame: Frame, nodeId: string): { frame: Frame } | undef
 function traversePath(root: Record<string, JsonValue>, path: string[]): JsonValue {
   let current: JsonValue | undefined = root[path[0] ?? '']
   for (let i = 1; i < path.length; i++) {
-    if (current === null || current === undefined || typeof current !== 'object' || Array.isArray(current)) return null
-    current = (current as Record<string, JsonValue>)[path[i] ?? '']
+    current = stepPath(current, path[i] ?? '')
+    if (current === undefined) return null
   }
   return current === undefined ? null : current
 }

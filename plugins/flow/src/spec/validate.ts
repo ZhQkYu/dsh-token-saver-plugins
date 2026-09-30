@@ -120,7 +120,7 @@ function checkNode(node: FlowNode, doc: FlowDocument, lookup: FlowLookup, limits
 
   for (const [i, binding] of iterBindings(node).entries()) {
     if ((binding.required ?? true) && binding.value.kind === 'literal' && binding.value.value === null) {
-      issues.push(mk('REQUIRED_INPUT', `required input "${binding.name}" has no value`, { nodeId: node.id, field: `${bindingsField(node)}.${i}.value` }))
+      issues.push(mk('REQUIRED_INPUT', `required input "${binding.name}" has no value`, { nodeId: node.id, field: `${bindingField(node, i)}.value` }))
     }
   }
   for (const { text, field } of requiredTexts(node)) {
@@ -212,6 +212,10 @@ function checkValueSource(entry: ValueSourceEntry, node: FlowNode, doc: FlowDocu
 function fieldSchemaAt(schema: VarSchema, path: readonly string[]): VarSchema {
   let current = schema
   for (const segment of path) {
+    if (current.type === 'array' && /^\d+$/.test(segment)) {
+      current = current.items ?? { type: 'any' }
+      continue
+    }
     if (current.type !== 'object' || current.properties === undefined) return { type: 'any' }
     const next = current.properties.find(field => field.name === segment)
     if (next === undefined) return { type: 'any' }
@@ -382,7 +386,7 @@ export function iterBindings(node: FlowNode): InputBinding[] {
     case 'agent': return node.data.inputs
     case 'code': return node.data.inputs
     case 'http': return node.data.inputs
-    case 'tool': return node.data.args
+    case 'tool': return [...node.data.args, ...(node.data.inputs ?? [])]
     case 'subflow': return node.data.inputs
     case 'question': return node.data.inputs
     case 'message': return node.data.inputs
@@ -391,9 +395,10 @@ export function iterBindings(node: FlowNode): InputBinding[] {
   }
 }
 
-/** The data field holding a node's bindings, for issue locations. */
-function bindingsField(node: FlowNode): string {
-  return node.type === 'tool' ? 'args' : 'inputs'
+/** The data field of a node's `index`-th binding (in {@link iterBindings} order), for issue locations. */
+function bindingField(node: FlowNode, index: number): string {
+  if (node.type !== 'tool') return `inputs.${index}`
+  return index < node.data.args.length ? `args.${index}` : `inputs.${index - node.data.args.length}`
 }
 
 /** Free-text fields a node cannot run without. */
@@ -424,8 +429,7 @@ export function iterValueSources(node: FlowNode): ValueSourceEntry[] {
   const push = (source: ValueSource, expected: VarSchema | undefined, field: string, scope: 'outer' | 'body' = 'outer'): void => {
     out.push({ source, field, scope, ...(expected === undefined ? {} : { expected }) })
   }
-  const bindingsKey = bindingsField(node)
-  for (const [i, binding] of iterBindings(node).entries()) push(binding.value, binding.schema, `${bindingsKey}.${i}.value`)
+  for (const [i, binding] of iterBindings(node).entries()) push(binding.value, binding.schema, `${bindingField(node, i)}.value`)
   switch (node.type) {
     case 'condition':
       for (const [b, branch] of node.data.branches.entries()) {
@@ -476,8 +480,25 @@ export function iterTemplates(node: FlowNode): { template: string; field: string
     case 'end': return node.data.mode === 'text' && node.data.template !== undefined ? [{ template: node.data.template, field: 'template' }] : []
     case 'message': return [{ template: node.data.template, field: 'template' }]
     case 'question': return [{ template: node.data.question, field: 'question' }]
+    case 'tool': return toolArgTemplates(node.data.args)
     default: return []
   }
+}
+
+/**
+ * The literal string tool args, which render as templates against the tool
+ * node's bindings before the call.
+ * @param args - the tool args.
+ * @returns the templates with their field locations.
+ */
+export function toolArgTemplates(args: readonly InputBinding[]): { template: string; field: string; name: string }[] {
+  const out: { template: string; field: string; name: string }[] = []
+  for (const [i, arg] of args.entries()) {
+    if (arg.value.kind === 'literal' && typeof arg.value.value === 'string' && arg.value.value.includes('{{')) {
+      out.push({ template: arg.value.value, field: `args.${i}.value`, name: arg.name })
+    }
+  }
+  return out
 }
 
 function mk(code: IssueCode, message: string, at: { nodeId?: string | undefined; edgeId?: string; field?: string; severity?: 'error' | 'warning' }): Issue {

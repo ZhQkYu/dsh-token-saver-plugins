@@ -26,6 +26,7 @@ Enable `dsh-flow` (Host) and `dsh-flow-ui` (Client) on the Plugins page. Flows a
 | File | Shows |
 |---|---|
 | `topic-outline.json` | LLM JSON output → `batch` expanding each item in parallel |
+| `topic-brief.json` | Every node type: intent branches, HTTP with declared `json` fields, `items[0].full_name` refs, aggregate, typed batch `item.q`, loop with break/assign, code, `web_ai_ask` with a `{{draft}}` prompt and `value.reply`, agent, question, end |
 | `http-check.json` | `http` → `condition` on status → `code` or `message` → `aggregate` |
 | `review-loop.json` | `loop` (infinite, max 5) with an LLM review, `break`, and `assign` |
 | `read-summarize-confirm.json` | `tool` (`read`) → `agent` → `question`; publish it as a tool and call it from a conversation |
@@ -86,6 +87,29 @@ The plugin always registers one tool, `flow_workflow`, whose definition does not
 | `start` | Starts a guided run in the current conversation and returns the step list; the model then does the steps itself |
 | `report` | Reports one guided step (`nodeId`, `status` `running`/`done`/`skipped`/`failed`, `summary`, chosen `branch`, and `outputs` for the `end` step) and returns what is left |
 | `status` | Returns a guided run's progress |
+
+## The Workflow designer preset
+
+The bundle adds the `flow-designer` agent preset (工作流设计师, `presets/flow-designer.patch.yml`). It composes the `@dsh-plugins/flow/design` plugin, the `skill`, `ask_user_question`, `todo_write`, `web_search`, `web_fetch`, file read/write/search, and `present` tools, plus `/compact`, and compaction. The design plugin registers the `flow_design` tool and a skill provider for `skills/flow-authoring` and `skills/flow-debugging`.
+
+| `action` | Does |
+|---|---|
+| `reference` | Returns every node type with its data fields and ports |
+| `catalog` | Lists callable tools with their argument and result schemas, and existing flows |
+| `list` / `get` | Lists flows or reads one document (without positions) |
+| `create` / `save` | Creates a flow or replaces its draft; nodes without positions are laid out automatically; returns validation issues |
+| `validate` | Validates a draft without saving it |
+| `test` | Runs the draft with sample inputs and returns a compact trace |
+| `debug_node` | Runs one node with sample inputs; literal bindings are used for inputs the call omits |
+| `run` | Reads the trace of a past run |
+| `answer` / `cancel` | `test` returns when a run pauses at a `question` node; `answer` replies to it (`runId`, `execKey`, `{text}` or `{optionId}`), `cancel` stops the run |
+| `delete` | Deletes a flow that was never published |
+
+Publishing stays a user action in the Flow editor.
+
+## Single-node debugging
+
+In the editor, a selected node that can run on its own has a Debug tab. It shows one field for each input port, prefilled from the last run's inputs or the configured literal, runs only that node (`POST api/dsh-flow/node.debug`), and shows its outputs and error. `start`, `end`, control-flow, and container nodes cannot be debugged on their own.
 
 ## Workflows as tools
 

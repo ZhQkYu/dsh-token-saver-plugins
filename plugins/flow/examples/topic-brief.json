@@ -1,0 +1,1066 @@
+{
+  "schemaVersion": 1,
+  "id": "topic-brief",
+  "name": "主题调研简报（全组件示例）",
+  "description": "意图分类→HTTP/消息分支→聚合→LLM拆题→批处理回答→JSON→循环润色→代码统计→网页AI点评→Agent起标题→人工确认→结束",
+  "nodes": [
+    {
+      "id": "start",
+      "title": "开始",
+      "position": {
+        "x": 0,
+        "y": 200
+      },
+      "type": "start",
+      "data": {
+        "fields": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "default": "Rust 异步运行时"
+          },
+          {
+            "name": "rounds",
+            "schema": {
+              "type": "integer"
+            },
+            "default": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "note",
+      "title": "说明",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "type": "comment",
+      "data": {
+        "text": "示例：用到 start/intent/http/message/aggregate/llm/batch/json/loop/condition/break/assign/code/tool/agent/question/end/comment。"
+      }
+    },
+    {
+      "id": "classify",
+      "title": "主题分类",
+      "position": {
+        "x": 260,
+        "y": 200
+      },
+      "type": "intent",
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          }
+        ],
+        "query": "{{topic}}",
+        "intents": [
+          {
+            "id": "tech",
+            "label": "技术/编程相关"
+          },
+          {
+            "id": "life",
+            "label": "其他"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gh",
+      "title": "GitHub 搜索",
+      "position": {
+        "x": 520,
+        "y": 100
+      },
+      "onError": {
+        "onError": "default",
+        "defaultOutputs": {
+          "status": 0,
+          "headers": {},
+          "body": "",
+          "json": {
+            "total_count": 0,
+            "items": [
+              {
+                "full_name": "(GitHub 不可用)",
+                "html_url": "",
+                "stargazers_count": 0
+              }
+            ]
+          }
+        }
+      },
+      "type": "http",
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          }
+        ],
+        "method": "GET",
+        "url": "https://api.github.com/search/repositories",
+        "headers": [
+          {
+            "name": "User-Agent",
+            "value": "dsh-flow"
+          }
+        ],
+        "query": [
+          {
+            "name": "q",
+            "value": "{{topic}}"
+          },
+          {
+            "name": "per_page",
+            "value": "3"
+          }
+        ],
+        "body": {
+          "kind": "none"
+        },
+        "timeoutMs": 15000,
+        "outputs": [
+          {
+            "name": "total_count",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "items",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": [
+                  {
+                    "name": "full_name",
+                    "schema": {
+                      "type": "string"
+                    }
+                  },
+                  {
+                    "name": "html_url",
+                    "schema": {
+                      "type": "string"
+                    }
+                  },
+                  {
+                    "name": "stargazers_count",
+                    "schema": {
+                      "type": "integer"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "skip",
+      "title": "非技术提示",
+      "position": {
+        "x": 520,
+        "y": 300
+      },
+      "type": "message",
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          }
+        ],
+        "template": "「{{topic}}」不是技术主题，跳过 GitHub 搜索。"
+      }
+    },
+    {
+      "id": "merge",
+      "title": "合并参考",
+      "position": {
+        "x": 780,
+        "y": 200
+      },
+      "type": "aggregate",
+      "data": {
+        "groups": [
+          {
+            "name": "reference",
+            "schema": {
+              "type": "string"
+            },
+            "candidates": [
+              {
+                "kind": "ref",
+                "node": "gh",
+                "source": "output",
+                "path": [
+                  "json",
+                  "items",
+                  "0",
+                  "full_name"
+                ]
+              },
+              {
+                "kind": "ref",
+                "node": "skip",
+                "source": "output",
+                "path": [
+                  "text"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "plan",
+      "title": "拆解问题",
+      "position": {
+        "x": 1040,
+        "y": 200
+      },
+      "type": "llm",
+      "data": {
+        "inputs": [
+          {
+            "name": "topic",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "start",
+              "source": "output",
+              "path": [
+                "topic"
+              ]
+            }
+          },
+          {
+            "name": "reference",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "merge",
+              "source": "output",
+              "path": [
+                "reference"
+              ]
+            }
+          }
+        ],
+        "system": "你是调研助理，只输出 JSON。",
+        "prompt": "围绕主题「{{topic}}」（参考：{{reference}}）提出 3 个关键问题，每个问题附 1 个关键词。",
+        "output": {
+          "format": "json",
+          "fields": [
+            {
+              "name": "questions",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": [
+                    {
+                      "name": "q",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "required": true
+                    },
+                    {
+                      "name": "keyword",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "batch",
+      "title": "并行回答",
+      "position": {
+        "x": 1300,
+        "y": 120
+      },
+      "size": {
+        "width": 320,
+        "height": 200
+      },
+      "type": "batch",
+      "data": {
+        "array": {
+          "kind": "ref",
+          "node": "plan",
+          "source": "output",
+          "path": [
+            "questions"
+          ]
+        },
+        "concurrency": 3,
+        "maxItems": 5,
+        "outputs": [
+          {
+            "name": "answers",
+            "value": {
+              "kind": "ref",
+              "node": "answer",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "answer",
+      "title": "回答单个问题",
+      "position": {
+        "x": 60,
+        "y": 70
+      },
+      "parentId": "batch",
+      "type": "llm",
+      "data": {
+        "inputs": [
+          {
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "batch",
+              "source": "inner",
+              "path": [
+                "item",
+                "q"
+              ]
+            }
+          },
+          {
+            "name": "i",
+            "schema": {
+              "type": "integer"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "batch",
+              "source": "inner",
+              "path": [
+                "index"
+              ]
+            }
+          }
+        ],
+        "system": "",
+        "prompt": "第 {{i}} 题：{{q}}\n用 2 句话简要回答。",
+        "output": {
+          "format": "text"
+        }
+      }
+    },
+    {
+      "id": "pack",
+      "title": "答案转文本",
+      "position": {
+        "x": 1680,
+        "y": 200
+      },
+      "type": "json",
+      "data": {
+        "op": "stringify",
+        "input": {
+          "kind": "ref",
+          "node": "batch",
+          "source": "output",
+          "path": [
+            "answers"
+          ]
+        },
+        "pretty": true
+      }
+    },
+    {
+      "id": "polish",
+      "title": "润色循环",
+      "position": {
+        "x": 1940,
+        "y": 100
+      },
+      "size": {
+        "width": 560,
+        "height": 240
+      },
+      "type": "loop",
+      "data": {
+        "mode": "count",
+        "count": {
+          "kind": "ref",
+          "node": "start",
+          "source": "output",
+          "path": [
+            "rounds"
+          ]
+        },
+        "maxIterations": 3,
+        "variables": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "initial": {
+              "kind": "ref",
+              "node": "pack",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ],
+        "outputs": []
+      }
+    },
+    {
+      "id": "long",
+      "title": "够长了？",
+      "position": {
+        "x": 40,
+        "y": 80
+      },
+      "parentId": "polish",
+      "type": "condition",
+      "data": {
+        "branches": [
+          {
+            "id": "enough",
+            "label": ">1500字",
+            "logic": "and",
+            "conditions": [
+              {
+                "left": {
+                  "kind": "ref",
+                  "node": "polish",
+                  "source": "inner",
+                  "path": [
+                    "draft"
+                  ]
+                },
+                "op": "len_gt",
+                "right": {
+                  "kind": "literal",
+                  "value": 1500
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "stop",
+      "title": "停止",
+      "position": {
+        "x": 260,
+        "y": 20
+      },
+      "parentId": "polish",
+      "type": "break",
+      "data": {}
+    },
+    {
+      "id": "refine",
+      "title": "润色成简报",
+      "position": {
+        "x": 260,
+        "y": 120
+      },
+      "parentId": "polish",
+      "type": "llm",
+      "data": {
+        "inputs": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "polish",
+              "source": "inner",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "system": "",
+        "prompt": "把下面的问答整理成一段中文简报（300字内）：\n{{draft}}",
+        "output": {
+          "format": "text"
+        }
+      }
+    },
+    {
+      "id": "keep",
+      "title": "保存草稿",
+      "position": {
+        "x": 440,
+        "y": 120
+      },
+      "parentId": "polish",
+      "type": "assign",
+      "data": {
+        "assignments": [
+          {
+            "variable": "draft",
+            "value": {
+              "kind": "ref",
+              "node": "refine",
+              "source": "output",
+              "path": [
+                "text"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "stats",
+      "title": "统计",
+      "position": {
+        "x": 2560,
+        "y": 200
+      },
+      "type": "code",
+      "data": {
+        "language": "typescript",
+        "inputs": [
+          {
+            "name": "answers",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "value": {
+              "kind": "ref",
+              "node": "batch",
+              "source": "output",
+              "path": [
+                "answers"
+              ]
+            }
+          },
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "polish",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "code": "async function main({ params }: { params: Record<string, any> }) {\n  return { count: params.answers.length, chars: params.draft.length }\n}",
+        "outputs": [
+          {
+            "name": "count",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "chars",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "webai",
+      "title": "网页AI点评",
+      "position": {
+        "x": 2820,
+        "y": 200
+      },
+      "onError": {
+        "timeoutMs": 120000,
+        "onError": "default",
+        "defaultOutputs": {
+          "text": "",
+          "value": {
+            "provider": "none",
+            "reply": "（网页 AI 不可用）",
+            "truncated": false,
+            "timedOut": false,
+            "elapsedMs": 0
+          }
+        }
+      },
+      "type": "tool",
+      "data": {
+        "tool": "web_ai_ask",
+        "args": [
+          {
+            "name": "provider",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "literal",
+              "value": "deepseek"
+            }
+          },
+          {
+            "name": "prompt",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "literal",
+              "value": "用一句话点评这份简报：{{draft}}"
+            }
+          },
+          {
+            "name": "conversation",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "literal",
+              "value": "new"
+            },
+            "required": false
+          }
+        ],
+        "inputs": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "polish",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "name": "provider",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "reply",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "truncated",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "timedOut",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "elapsedMs",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "title",
+      "title": "起标题",
+      "position": {
+        "x": 3080,
+        "y": 200
+      },
+      "type": "agent",
+      "data": {
+        "inputs": [
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "polish",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          }
+        ],
+        "prompt": "为下面的简报起一个不超过 15 字的标题，只输出标题：\n{{draft}}",
+        "tools": {
+          "allow": []
+        },
+        "outputs": [
+          {
+            "name": "title",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "confirm",
+      "title": "人工确认",
+      "position": {
+        "x": 3340,
+        "y": 200
+      },
+      "type": "question",
+      "data": {
+        "inputs": [
+          {
+            "name": "title",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "title",
+              "source": "output",
+              "path": [
+                "title"
+              ]
+            }
+          }
+        ],
+        "question": "标题「{{title}}」可以吗？",
+        "answer": {
+          "kind": "options",
+          "options": [
+            {
+              "id": "ok",
+              "label": "可以"
+            },
+            {
+              "id": "no",
+              "label": "不行"
+            }
+          ],
+          "allowOther": false
+        }
+      }
+    },
+    {
+      "id": "end",
+      "title": "结束",
+      "position": {
+        "x": 3600,
+        "y": 200
+      },
+      "type": "end",
+      "data": {
+        "mode": "text",
+        "inputs": [
+          {
+            "name": "title",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "title",
+              "source": "output",
+              "path": [
+                "title"
+              ]
+            }
+          },
+          {
+            "name": "draft",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "polish",
+              "source": "output",
+              "path": [
+                "draft"
+              ]
+            }
+          },
+          {
+            "name": "review",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "webai",
+              "source": "output",
+              "path": [
+                "value",
+                "reply"
+              ]
+            }
+          },
+          {
+            "name": "count",
+            "schema": {
+              "type": "integer"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "stats",
+              "source": "output",
+              "path": [
+                "count"
+              ]
+            }
+          },
+          {
+            "name": "chars",
+            "schema": {
+              "type": "integer"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "stats",
+              "source": "output",
+              "path": [
+                "chars"
+              ]
+            }
+          },
+          {
+            "name": "choice",
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "kind": "ref",
+              "node": "confirm",
+              "source": "output",
+              "path": [
+                "answer"
+              ]
+            }
+          }
+        ],
+        "template": "# {{title}}\n\n{{draft}}\n\n> 网页AI点评：{{review}}\n\n（{{count}} 个问题，{{chars}} 字，确认：{{choice}}）"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-next-classify",
+      "source": "start",
+      "sourceHandle": "next",
+      "target": "classify"
+    },
+    {
+      "id": "classify-tech-gh",
+      "source": "classify",
+      "sourceHandle": "tech",
+      "target": "gh"
+    },
+    {
+      "id": "classify-other-skip",
+      "source": "classify",
+      "sourceHandle": "other",
+      "target": "skip"
+    },
+    {
+      "id": "classify-life-skip",
+      "source": "classify",
+      "sourceHandle": "life",
+      "target": "skip"
+    },
+    {
+      "id": "gh-next-merge",
+      "source": "gh",
+      "sourceHandle": "next",
+      "target": "merge"
+    },
+    {
+      "id": "skip-next-merge",
+      "source": "skip",
+      "sourceHandle": "next",
+      "target": "merge"
+    },
+    {
+      "id": "merge-next-plan",
+      "source": "merge",
+      "sourceHandle": "next",
+      "target": "plan"
+    },
+    {
+      "id": "plan-next-batch",
+      "source": "plan",
+      "sourceHandle": "next",
+      "target": "batch"
+    },
+    {
+      "id": "batch-body-answer",
+      "source": "batch",
+      "sourceHandle": "body",
+      "target": "answer"
+    },
+    {
+      "id": "batch-next-pack",
+      "source": "batch",
+      "sourceHandle": "next",
+      "target": "pack"
+    },
+    {
+      "id": "pack-next-polish",
+      "source": "pack",
+      "sourceHandle": "next",
+      "target": "polish"
+    },
+    {
+      "id": "polish-body-long",
+      "source": "polish",
+      "sourceHandle": "body",
+      "target": "long"
+    },
+    {
+      "id": "long-enough-stop",
+      "source": "long",
+      "sourceHandle": "enough",
+      "target": "stop"
+    },
+    {
+      "id": "long-else-refine",
+      "source": "long",
+      "sourceHandle": "else",
+      "target": "refine"
+    },
+    {
+      "id": "refine-next-keep",
+      "source": "refine",
+      "sourceHandle": "next",
+      "target": "keep"
+    },
+    {
+      "id": "polish-next-stats",
+      "source": "polish",
+      "sourceHandle": "next",
+      "target": "stats"
+    },
+    {
+      "id": "stats-next-webai",
+      "source": "stats",
+      "sourceHandle": "next",
+      "target": "webai"
+    },
+    {
+      "id": "webai-next-title",
+      "source": "webai",
+      "sourceHandle": "next",
+      "target": "title"
+    },
+    {
+      "id": "title-next-confirm",
+      "source": "title",
+      "sourceHandle": "next",
+      "target": "confirm"
+    },
+    {
+      "id": "confirm-ok-end",
+      "source": "confirm",
+      "sourceHandle": "ok",
+      "target": "end"
+    },
+    {
+      "id": "confirm-no-end",
+      "source": "confirm",
+      "sourceHandle": "no",
+      "target": "end"
+    }
+  ],
+  "revision": 1,
+  "updatedAt": 0
+}

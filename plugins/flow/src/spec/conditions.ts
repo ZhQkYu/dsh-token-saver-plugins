@@ -28,10 +28,10 @@ export function evaluateOp(op: ConditionOp, left: JsonValue, right: JsonValue | 
   switch (op) {
     case 'eq': return { result: valueEq(left, right) }
     case 'ne': return { result: !valueEq(left, right) }
-    case 'gt': return { result: compare(left, right) > 0 }
-    case 'ge': return { result: compare(left, right) >= 0 }
-    case 'lt': return { result: compare(left, right) < 0 }
-    case 'le': return { result: compare(left, right) <= 0 }
+    case 'gt': return ordered(left, right, c => c > 0)
+    case 'ge': return ordered(left, right, c => c >= 0)
+    case 'lt': return ordered(left, right, c => c < 0)
+    case 'le': return ordered(left, right, c => c <= 0)
     case 'contains': return { result: contains(left, right) }
     case 'not_contains': return { result: !contains(left, right) }
     case 'contains_key': return { result: containsKey(left, right) }
@@ -62,11 +62,26 @@ function valueEq(left: JsonValue, right: JsonValue | undefined): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
-function compare(left: JsonValue, right: JsonValue | undefined): number {
-  if (typeof left === 'number' && typeof right === 'number') return left - right
-  const l = String(left ?? '')
-  const r = String(right ?? '')
-  return l < r ? -1 : l > r ? 1 : 0
+/**
+ * Order two values. Two strings compare as text; when either side is a number, both must
+ * convert to finite numbers, so `"10" > 9` is numeric. Null, missing, or mixed
+ * non-numeric values are false with a warning instead of a text comparison.
+ */
+function ordered(left: JsonValue, right: JsonValue | undefined, test: (cmp: number) => boolean): ConditionEval {
+  if (typeof left === 'string' && typeof right === 'string') return { result: test(left < right ? -1 : left > right ? 1 : 0) }
+  const l = toNumber(left)
+  const r = toNumber(right)
+  if (l === undefined || r === undefined) return { result: false, warning: 'ordering comparison needs two numbers or two strings' }
+  return { result: test(l - r) }
+}
+
+function toNumber(value: JsonValue | undefined): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'string' && value.trim() !== '') {
+    const num = Number(value)
+    return Number.isFinite(num) ? num : undefined
+  }
+  return undefined
 }
 
 function contains(left: JsonValue, right: JsonValue | undefined): boolean {

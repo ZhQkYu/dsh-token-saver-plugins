@@ -201,6 +201,7 @@ export function RunPanel({ doc, t, beforeRun, onView, onIssues }: RunPanelProps)
                 : <pre className="dsflow-pre">{JSON.stringify(view.outputs, null, 2)}</pre>}
             </div>
           )}
+          {view.nodes.length > 0 && <div className="dsflow-muted">{t('trace.hint')}</div>}
         </div>
       )}
     </div>

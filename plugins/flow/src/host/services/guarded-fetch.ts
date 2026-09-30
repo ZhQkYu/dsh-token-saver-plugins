@@ -246,10 +246,17 @@ function isAllowedHost(host: string, allowedHosts: string[]): boolean {
   return false
 }
 
-function globMatch(value: string, pattern: string): boolean {
+/**
+ * Match a lowercase host against an `allowedHosts` pattern; `*` matches within one DNS label.
+ * @param value - lowercase host.
+ * @param pattern - lowercase pattern.
+ * @returns whether the host matches.
+ */
+export function globMatch(value: string, pattern: string): boolean {
   const regex = pattern
     .split('*')
     .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.*')
+    // `*` matches within one DNS label, as documented; it never crosses a dot.
+    .join('[^.]*')
   return new RegExp(`^${regex}$`).test(value)
 }

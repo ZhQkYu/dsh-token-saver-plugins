@@ -8,7 +8,7 @@
  * @module @dsh-plugins/flow/host/engine/scheduler
  */
 
-import type { FlowNode, FrameStep, JsonValue, RunEvent, TokenUsageLite } from '../../spec/types.ts'
+import type { FlowNode, FrameStep, JsonValue, RunEvent, TokenUsageLite, ValueSource } from '../../spec/types.ts'
 import type { ScopePlan, ExecutionPlan } from './compile.ts'
 import { createFrame, execKey, type Frame } from './frames.ts'
 import { resolveRef } from './frames.ts'
@@ -293,7 +293,8 @@ async function executeNode(frame: Frame, node: FlowNode, ctx: RunContext, flowSt
     attemptController?.abort(new RunAbort('sibling'))
     attemptController = new AbortController()
     const timeoutMs = policy?.timeoutMs === undefined ? undefined : Math.min(policy.timeoutMs, ctx.limits.maxNodeTimeoutMs)
-    const signal = AbortSignal.any([frame.signal, attemptController.signal, ...(timeoutMs === undefined ? [] : [AbortSignal.timeout(timeoutMs)])])
+    const ownTimeout = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
+    const signal = AbortSignal.any([frame.signal, attemptController.signal, ...(ownTimeout === undefined ? [] : [ownTimeout])])
     frame.status.set(node.id, 'running')
 
     let inputs: Record<string, JsonValue>
@@ -331,8 +332,8 @@ async function executeNode(frame: Frame, node: FlowNode, ctx: RunContext, flowSt
         return
       }
       if (signal.aborted) {
-        const cls = classifyAbort(signal)
-        if (cls === 'cancelled') {
+        // Only this node's own timer is a retryable timeout; a parent container's timeout cancels it.
+        if (ownTimeout?.aborted !== true || frame.signal.aborted) {
           frame.status.set(node.id, 'cancelled')
           frame.firedPorts.set(node.id, [])
           finish(ctx, frame, node, 'cancelled', attempt, {})
@@ -391,7 +392,7 @@ function resolveInputsForNode(node: FlowNode, frame: Frame): Record<string, Json
   for (const binding of iterBindings(node)) {
     const raw = resolveRef(frame, binding.value)
     if (raw === null) {
-      if (binding.required ?? true) throw new NodeError('REQUIRED_INPUT', `required input "${binding.name}" is null or missing`)
+      if (binding.required ?? true) throw new NodeError('REQUIRED_INPUT', `required input "${binding.name}" is null or missing${upstreamNote(frame, binding.value)}`)
       out[binding.name] = null
       continue
     }
@@ -400,6 +401,18 @@ function resolveInputsForNode(node: FlowNode, frame: Frame): Record<string, Json
     out[binding.name] = coerced.value
   }
   return out
+}
+
+/** Explain a null input whose upstream node did not succeed (e.g. an untaken condition branch). */
+function upstreamNote(frame: Frame, ref: ValueSource): string {
+  if (ref.kind !== 'ref' || ref.source === 'inner') return ''
+  for (let current: Frame | undefined = frame; current !== undefined; current = current.parent) {
+    const status = current.status.get(ref.node)
+    if (status === undefined) continue
+    if (status === 'succeeded') return ''
+    return ` (upstream node "${ref.node}" is ${status}; join branches with an aggregate node or mark the input optional)`
+  }
+  return ''
 }
 
 /** Coerce the default outputs for an `onError=default` node against its spec. */
@@ -418,7 +431,7 @@ function resolveDefaultOutputs(node: FlowNode, defaultOutputs: Record<string, Js
   return out
 }
 
-/** Resolve and coerce the start inputs (the engine already validated them). */
+/** Resolve and coerce the start inputs; a value that fails its declared type is an error, never a silent null. */
 function startInputs(inputs: Record<string, JsonValue>, start: FlowNode): Record<string, JsonValue> {
   if (start.type !== 'start') return inputs
   const out: Record<string, JsonValue> = {}
@@ -429,7 +442,8 @@ function startInputs(inputs: Record<string, JsonValue>, start: FlowNode): Record
       continue
     }
     const coerced = coerce(raw, field.schema)
-    out[field.name] = coerced.ok ? coerced.value : null
+    if (!coerced.ok) throw new NodeError('INPUT_TYPE', `start input "${field.name}": ${coerced.reason}`)
+    out[field.name] = coerced.value
   }
   return out
 }
@@ -451,12 +465,6 @@ function abortPromise(signal: AbortSignal): Promise<never> {
   })
 }
 
-/** A node signal aborted by its own timeout is a retryable failure; any other abort cancels the node. */
-function classifyAbort(signal: AbortSignal): 'cancelled' | 'node-timeout' {
-  const reason: unknown = signal.reason
-  if (reason instanceof DOMException && reason.name === 'TimeoutError') return 'node-timeout'
-  return 'cancelled'
-}
 
 function extraOf(result: ExecResult, outputs: Record<string, JsonValue>, firedPorts: string[], durationMs: number): FinishedExtra {
   return {

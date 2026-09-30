@@ -2,7 +2,8 @@
  * Template parsing and rendering. A template is a string with `{{ name }}` and
  * `{{ name.field.sub }}` placeholders; `\{{` escapes to a literal `{{`. There
  * are no expressions, filters, or function calls and no `eval`/`new Function`.
- * The first path segment is a node input name, the rest are object fields.
+ * The first path segment is a node input name, the rest are object fields or
+ * array indices (`{{ items[0].name }}` or `{{ items.0.name }}`).
  *
  * @module @dsh-plugins/flow/spec/template
  */
@@ -31,6 +32,12 @@ export function parseTemplate(template: string): TemplatePart[] {
       text += template.slice(index)
       break
     }
+    if (start > index && template[start - 1] === '\\') {
+      // `\{{` mid-text: emit the preceding text and resume at the escape.
+      text += template.slice(index, start - 1)
+      index = start - 1
+      continue
+    }
     if (start > index) text += template.slice(index, start)
     const end = template.indexOf('}}', start + 2)
     if (end === -1) {
@@ -44,7 +51,7 @@ export function parseTemplate(template: string): TemplatePart[] {
       index = end + 2
       continue
     }
-    const path = inner.split('.').map(part => part.trim()).filter(part => part !== '')
+    const path = parsePath(inner)
     if (path.length === 0) {
       text += '{{}}'
       index = end + 2
@@ -59,6 +66,40 @@ export function parseTemplate(template: string): TemplatePart[] {
   }
   if (text !== '') parts.push({ kind: 'text', text })
   return parts
+}
+
+/**
+ * Split a member expression such as `a.b[0].c` or `a.items.0` into path
+ * segments (`['a', 'b', '0', 'c']`). Numeric segments index arrays.
+ * @param text - the member expression.
+ * @returns the non-empty segments.
+ */
+export function parsePath(text: string): string[] {
+  return text.replace(/\[\s*(\d+)\s*\]/g, '.$1').split('.').map(part => part.trim()).filter(part => part !== '')
+}
+
+/**
+ * Format path segments as a member expression, e.g. `a.b[0].c`.
+ * @param path - the segments.
+ * @returns the expression.
+ */
+export function formatPath(path: readonly string[]): string {
+  let out = ''
+  for (const segment of path) out += /^\d+$/.test(segment) && out !== '' ? `[${segment}]` : out === '' ? segment : `.${segment}`
+  return out
+}
+
+/**
+ * Step one path segment into a value: an object field, or an array index for
+ * a numeric segment. `undefined` when the step does not exist.
+ * @param value - the current value.
+ * @param segment - the field name or index.
+ * @returns the child value.
+ */
+export function stepPath(value: JsonValue | undefined, segment: string): JsonValue | undefined {
+  if (value === null || value === undefined || typeof value !== 'object') return undefined
+  if (Array.isArray(value)) return /^\d+$/.test(segment) ? value[Number(segment)] : undefined
+  return (value as Record<string, JsonValue>)[segment]
 }
 
 /** The result of rendering a template. */
@@ -90,7 +131,7 @@ export function renderTemplate(template: string, values: Record<string, JsonValu
     const [root, ...rest] = part.path
     const rootValue = values[root ?? '']
     if (rootValue === undefined || rootValue === null) {
-      warnings.push(`template variable "{{${part.path.join('.')}}}" is missing`)
+      warnings.push(`template variable "{{${formatPath(part.path)}}}" is missing`)
     }
     const value = resolvePath(rootValue ?? null, rest, warnings, part.path)
     out += renderValue(value)
@@ -101,13 +142,13 @@ export function renderTemplate(template: string, values: Record<string, JsonValu
 function resolvePath(value: JsonValue, rest: string[], warnings: string[], path: string[]): JsonValue {
   let current: JsonValue = value
   for (const segment of rest) {
-    if (current === null || current === undefined || typeof current !== 'object' || Array.isArray(current)) {
-      warnings.push(`template path "${path.join('.')}" stopped at "${segment}"`)
+    if (current === null || current === undefined || typeof current !== 'object') {
+      warnings.push(`template path "${formatPath(path)}" stopped at "${segment}"`)
       return null
     }
-    const next = (current as Record<string, JsonValue>)[segment]
+    const next = stepPath(current, segment)
     if (next === undefined) {
-      warnings.push(`template path "${path.join('.')}" missing field "${segment}"`)
+      warnings.push(`template path "${formatPath(path)}" missing field "${segment}"`)
       return null
     }
     current = next

@@ -18,11 +18,11 @@ export const httpSpec: NodeSpec<HttpNode> = {
   defaults: () => ({ inputs: [], method: 'GET', url: '', headers: [], query: [], body: { kind: 'none' } }),
   hasInput: () => true,
   ports: () => [{ id: 'next', label: 'next', kind: 'next' }],
-  outputs: () => [
+  outputs: (node) => [
     { name: 'status', schema: { type: 'integer' } },
     { name: 'headers', schema: { type: 'object' } },
     { name: 'body', schema: { type: 'string' } },
-    { name: 'json', schema: { type: 'any' } },
+    { name: 'json', schema: node.data.outputs === undefined || node.data.outputs.length === 0 ? { type: 'any' } : { type: 'object', properties: node.data.outputs } },
   ],
   validate: (node, ctx): Issue[] => {
     const issues: Issue[] = []

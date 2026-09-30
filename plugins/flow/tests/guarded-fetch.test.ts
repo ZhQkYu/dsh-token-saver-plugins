@@ -1,7 +1,16 @@
 import { describe, expect, it, afterAll } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { createGuardedFetch, BlockedUrlError } from '../src/host/services/guarded-fetch.ts'
+import { createGuardedFetch, BlockedUrlError, globMatch } from '../src/host/services/guarded-fetch.ts'
+
+describe('allowedHosts globMatch', () => {
+  it('keeps * within one DNS label', () => {
+    expect(globMatch('api.example.com', '*.example.com')).toBe(true)
+    expect(globMatch('a.b.example.com', '*.example.com')).toBe(false)
+    expect(globMatch('api.evil.attacker.net', 'api.*')).toBe(false)
+    expect(globMatch('evil.attacker.example.com', '*example.com')).toBe(false)
+  })
+})
 
 function startServer(handler: http.RequestListener): Promise<{ port: number; close: () => Promise<void> }> {
   return new Promise((resolve) => {

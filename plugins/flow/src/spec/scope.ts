@@ -8,6 +8,7 @@
 
 import type { FlowDocument, FlowLookup, FlowNode, VarField, VarType } from './types.ts'
 import { specOf } from './nodes/index.ts'
+import { sourceSchema } from './source-schema.ts'
 
 /** The root scope marker. */
 export const ROOT_SCOPE = 'root'
@@ -133,7 +134,7 @@ export function availableVariables(doc: FlowDocument, nodeId: string, lookup: Fl
   const groups: VarGroup[] = []
   const describe = (ids: ReadonlySet<string>): VarGroup['nodes'] => doc.nodes
     .filter(node => ids.has(node.id) && specOf(node).executable)
-    .map(node => ({ nodeId: node.id, nodeTitle: node.title, nodeType: node.type, outputs: specOf(node).outputs(node, lookup) }))
+    .map(node => ({ nodeId: node.id, nodeTitle: node.title, nodeType: node.type, outputs: typedOutputs(doc, node, lookup) }))
 
   const same = describe(index.ancestors(nodeId))
   if (same.length > 0) groups.push({ label: 'same scope', nodes: same })
@@ -148,11 +149,28 @@ export function availableVariables(doc: FlowDocument, nodeId: string, lookup: Fl
   if (innermost !== undefined) {
     const container = nodeById(doc, innermost)
     if (container !== undefined) {
-      const fields = innerVarsOf(container)
+      const fields = innerVarsOf(container).map(field => field.name === 'item' ? { ...field, schema: sourceSchema(doc, { kind: 'ref', node: innermost, source: 'inner', path: ['item'] }, lookup) } : field)
       if (fields.length > 0) groups.push({ label: `inner ${innermost}`, nodes: [], inner: { containerId: innermost, fields } })
     }
   }
   return groups
+}
+
+/**
+ * A node's outputs with container collected outputs typed as arrays of the
+ * collected value's schema, so `results[0].field` can be picked downstream.
+ * @param doc - the flow.
+ * @param node - the node.
+ * @param lookup - subflow lookup.
+ * @returns the output fields.
+ */
+export function typedOutputs(doc: FlowDocument, node: FlowNode, lookup: FlowLookup): VarField[] {
+  const fields = specOf(node).outputs(node, lookup)
+  if (node.type !== 'loop' && node.type !== 'batch') return fields
+  return fields.map((field) => {
+    const collected = node.data.outputs.find(output => output.name === field.name)
+    return collected === undefined ? field : { ...field, schema: { type: 'array', items: sourceSchema(doc, collected.value, lookup) } }
+  })
 }
 
 function innerVarsOf(container: FlowNode): VarField[] {

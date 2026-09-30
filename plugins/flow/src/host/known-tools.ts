@@ -16,6 +16,7 @@ type ToolSchema = ReturnType<Context['tools']['schemas']>[number]
 /** A tool list that combines the global, preset, and live-Agent views. */
 export class ToolCatalog {
   private presetTools: ToolSchema[] = []
+  private presetOutputs = new Map<string, unknown>()
 
   constructor(private readonly ctx: Context, private readonly preset: string | undefined) {}
 
@@ -24,9 +25,26 @@ export class ToolCatalog {
     try {
       await using lease = await this.ctx.agentPresets.acquireScope(this.preset)
       this.presetTools = this.ctx.tools.schemas(lease.key)
+      this.presetOutputs = new Map(this.presetTools.map(tool => [tool.name, this.ctx.tools.get(tool.name, lease.key)?.output.schema]))
     } catch (error: unknown) {
       this.ctx.logger.debug(`flow: preset tool list unavailable: ${error instanceof Error ? error.message : String(error)}`)
     }
+  }
+
+  /**
+   * The JSON Schema of a tool's structured `value`, when it declares one.
+   * @param name - the tool name.
+   * @returns the output schema, or undefined.
+   */
+  outputSchema(name: string): unknown {
+    const global = this.ctx.tools.get(name)?.output.schema
+    if (global !== undefined) return global
+    if (this.presetOutputs.has(name)) return this.presetOutputs.get(name)
+    for (const agent of this.ctx.agents.roots()) {
+      const schema = this.ctx.tools.get(name, agent)?.output.schema
+      if (schema !== undefined) return schema
+    }
+    return undefined
   }
 
   /**

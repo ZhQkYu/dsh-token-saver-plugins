@@ -121,6 +121,12 @@ export class RunStore {
     return this.truncated.has(runId)
   }
 
+  /** Drop in-memory event tracking for a finished run; call after its final summary is written. */
+  releaseRun(runId: string): void {
+    this.eventBytes.delete(runId)
+    this.truncated.delete(runId)
+  }
+
   /** Read all persisted events for a run. */
   readEvents(runId: string): RunEvent[] {
     this.assertId(runId)
@@ -159,6 +165,7 @@ export class RunStore {
     const dir = this.runDir(flowId, runId)
     this.index.delete(runId)
     this.eventBytes.delete(runId)
+    this.truncated.delete(runId)
     try {
       fs.rmSync(dir, { recursive: true, force: true })
     } catch {

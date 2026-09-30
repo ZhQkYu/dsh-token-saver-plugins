@@ -133,6 +133,38 @@ function objectFromJsonSchema(record: Record<string, unknown>): VarSchema {
   return { type: 'object', properties: fields, description: asString(record['description']) }
 }
 
+/**
+ * Infer a schema from a sample value (e.g. a node's last run output), so
+ * downstream pickers can offer its fields. Arrays take their first element's
+ * schema; `null` is `any`.
+ * @param value - the sample value.
+ * @param depth - the remaining nesting depth to describe.
+ * @returns the inferred schema.
+ */
+export function schemaFromValue(value: JsonValue | undefined, depth = 6): VarSchema {
+  if (value === null || value === undefined) return { type: 'any' }
+  if (typeof value === 'string') return { type: 'string' }
+  if (typeof value === 'boolean') return { type: 'boolean' }
+  if (typeof value === 'number') return { type: Number.isInteger(value) ? 'integer' : 'number' }
+  if (Array.isArray(value)) {
+    if (depth <= 0 || value.length === 0) return { type: 'array' }
+    return { type: 'array', items: schemaFromValue(value[0], depth - 1) }
+  }
+  if (depth <= 0) return { type: 'object' }
+  return { type: 'object', properties: fieldsFromValue(value, depth) }
+}
+
+/**
+ * The fields of an object sample value, see {@link schemaFromValue}.
+ * @param value - the sample object.
+ * @param depth - the remaining nesting depth.
+ * @returns one field per key.
+ */
+export function fieldsFromValue(value: JsonValue | undefined, depth = 6): VarField[] {
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return []
+  return Object.entries(value).map(([name, child]) => ({ name, schema: schemaFromValue(child, depth - 1) }))
+}
+
 /** Build a DSH `defineTool` parameter schema spec from a {@link VarSchema}. */
 export function toParameterSchemaSpec(schema: VarSchema, required: boolean): Record<string, unknown> {
   const req = required ? { required: true } : {}

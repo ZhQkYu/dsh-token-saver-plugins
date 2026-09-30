@@ -34,12 +34,12 @@
 
 具体拆解成 4 个能力：
 
-| 能力 | 解决的问题 | 对应插件 |
-|---|---|---|
-| 工具开关 | 工具描述占上下文，不用时关掉 | `tool-gate` |
-| 会话记忆 + 接力 | 上下文满了要开新会话，但不能"失忆" | `session-handoff` |
-| 免费 AI 桥 | 琐碎子任务不用付费模型，丢给网页 AI | `web-ai-bridge` |
-| 可视化流程 | 多步任务光靠文字容易跑偏，画成流程图 | `flow` |
+| 能力            | 解决的问题                           | 对应插件            |
+| --------------- | ------------------------------------ | ------------------- |
+| 工具开关        | 工具描述占上下文，不用时关掉         | `tool-gate`       |
+| 会话记忆 + 接力 | 上下文满了要开新会话，但不能"失忆"   | `session-handoff` |
+| 免费 AI 桥      | 琐碎子任务不用付费模型，丢给网页 AI  | `web-ai-bridge`   |
+| 可视化流程      | 多步任务光靠文字容易跑偏，画成流程图 | `flow`            |
 
 它们**不是**给模型加"新玩法"，而是**给模型提供可感知、可操控的工具与上下文**，让模型自己决定何时省 token、何时交接、何时分派。
 
@@ -47,12 +47,12 @@
 
 ## 插件总览
 
-| 代号 | 插件 | 主 Agent 看到的工具 | 用户可见 UI | 作用一句话 |
-|---|---|---|---|---|
-| A | `tool-gate` 工具分组开关 | `tool_gate` | （可选）会话级开关面板 | 按需启停工具组，省上下文 |
-| B | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文 | 新会话出现在侧栏 | 记忆文件 + 会话接力，延长生命周期 |
-| C | `web-ai-bridge` 免费网页 AI 桥 | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口 | 把子任务丢给免费网页 AI |
-| D | `flow` 可视化工作流 | `flow_workflow`（+ 可选发布的 `flow_<name>`） | 侧栏"工作流"页面（`flow-ui`） | 确定性流程由引擎执行；引导流程由模型照着做 |
+| 代号 | 插件                               | 主 Agent 看到的工具                                  | 用户可见 UI                     | 作用一句话                                 |
+| ---- | ---------------------------------- | ---------------------------------------------------- | ------------------------------- | ------------------------------------------ |
+| A    | `tool-gate` 工具分组开关         | `tool_gate`                                        | （可选）会话级开关面板          | 按需启停工具组，省上下文                   |
+| B    | `session-handoff` 会话记忆与交接 | `session_handoff` + 记忆上下文                     | 新会话出现在侧栏                | 记忆文件 + 会话接力，延长生命周期          |
+| C    | `web-ai-bridge` 免费网页 AI 桥   | `web_ai_ask` / `web_ai_status` / `web_ai_open` | 可见的浏览器窗口                | 把子任务丢给免费网页 AI                    |
+| D    | `flow` 可视化工作流              | `flow_workflow`（+ 可选发布的 `flow_<name>`）    | 侧栏"工作流"页面（`flow-ui`） | 确定性流程由引擎执行；引导流程由模型照着做 |
 
 配套前端 bundle：`@dsh-plugins/flow-ui` 渲染 flow 插件的列表页与画布编辑器。
 
@@ -131,6 +131,7 @@ pnpm dsh --profile web add github:ZhQkYu/dsh-plugins
    把这项授权视为**允许该包代码在安装时于你的机器上执行**。只对可信源码授权，并建议锁定 commit（`github:ZhQkYu/dsh-plugins#<sha>`）。
 
 > 若不想让用户做授权，可在发布时选择**预构建产物**（任一即可）：
+>
 > - **发布到 npm**（`pnpm publish` 时构建好 `lib/`）：`pnpm dsh plugin add @dsh-plugins/token-saver`
 > - **打 tarball**（`pnpm pack`）：`pnpm dsh plugin add ./token-saver-0.1.0.tgz`
 
@@ -203,12 +204,12 @@ dsh-plugins/
 
 ### Config（`cordis.patch.yml`）
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `groups` | `[]` | 显式工具组；`name` 唯一，`tools` 支持 `*` 通配 |
-| `autoMcpGroups` | `true` | 为未被显式组覆盖的 MCP server 生成 `mcp-<server>` 组 |
-| `mcpEnabledByDefault` | `false` | 自动 MCP 组的默认状态 |
-| `gateSubagents` | `true` | 子 Agent（`origin === 'subagent'`）是否也受控 |
+| 字段                    | 默认      | 说明                                                  |
+| ----------------------- | --------- | ----------------------------------------------------- |
+| `groups`              | `[]`    | 显式工具组；`name` 唯一，`tools` 支持 `*` 通配  |
+| `autoMcpGroups`       | `true`  | 为未被显式组覆盖的 MCP server 生成`mcp-<server>` 组 |
+| `mcpEnabledByDefault` | `false` | 自动 MCP 组的默认状态                                 |
+| `gateSubagents`       | `true`  | 子 Agent（`origin === 'subagent'`）是否也受控       |
 
 ### Model Experience
 
@@ -233,14 +234,14 @@ dsh-plugins/
 
 ### Config（`cordis.patch.yml`）
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `memoryFile` | `.dsh/memory.md` | 相对会话 cwd |
-| `memoryMaxBytes` | `16384` | 超出截断并在末尾注明 |
-| `handoffDir` | `.dsh/handoffs` | 相对会话 cwd |
-| `suggestAtInputTokens` | `60000` | **输入 token 阈值**，达到即提醒"该交接了"；`0` 关闭自动提醒 |
-| `archiveOldSession` | `true` | 空闲后归档旧会话 |
-| `titleSuffix` | ` (cont.)` | 新会话标题后缀 |
+| 字段                     | 默认               | 说明                                                                |
+| ------------------------ | ------------------ | ------------------------------------------------------------------- |
+| `memoryFile`           | `.dsh/memory.md` | 相对会话 cwd                                                        |
+| `memoryMaxBytes`       | `16384`          | 超出截断并在末尾注明                                                |
+| `handoffDir`           | `.dsh/handoffs`  | 相对会话 cwd                                                        |
+| `suggestAtInputTokens` | `60000`          | **输入 token 阈值**，达到即提醒"该交接了"；`0` 关闭自动提醒 |
+| `archiveOldSession`    | `true`           | 空闲后归档旧会话                                                    |
+| `titleSuffix`          | ` (cont.)`       | 新会话标题后缀                                                      |
 
 > 阈值调整：`suggestAtInputTokens` 越小越早提醒，越大越晚提醒。`0` 表示完全禁用自动提醒。改完需重启 dsh。
 
@@ -274,13 +275,13 @@ dsh-plugins/
 
 ### 默认 provider
 
-| id | url | strengths |
-|---|---|---|
-| deepseek | `https://chat.deepseek.com/` | reasoning, math, long-form analysis |
-| doubao | `https://www.doubao.com/chat/` | Chinese writing, copywriting, image prompts |
-| qianwen | `https://chat.qwen.ai/` | Chinese knowledge Q&A, summarization |
-| zhipu | `https://chatglm.cn/` | code generation and explanation |
-| kimi | `https://www.kimi.com/` | long-document reading, web search summaries |
+| id       | url                              | strengths                                   |
+| -------- | -------------------------------- | ------------------------------------------- |
+| deepseek | `https://chat.deepseek.com/`   | reasoning, math, long-form analysis         |
+| doubao   | `https://www.doubao.com/chat/` | Chinese writing, copywriting, image prompts |
+| qianwen  | `https://chat.qwen.ai/`        | Chinese knowledge Q&A, summarization        |
+| zhipu    | `https://chatglm.cn/`          | code generation and explanation             |
+| kimi     | `https://www.kimi.com/`        | long-document reading, web search summaries |
 
 ### 选择器（selectors）
 
@@ -322,10 +323,10 @@ deepseek 用的是 `ds-*` 设计系统类名（**不带构建哈希后缀**，�
 
 **作用：在画布上画出工作流，有两种类型：**
 
-| 类型 | 谁执行 | 适合 |
-|---|---|---|
-| 确定性流程（`flow`） | flow 引擎按连线执行，节点之间传类型化变量 | 固定流水线：抓取、解析、分支、批处理 |
-| 引导流程（`guided`） | 模型照着步骤清单做：在对话里执行（`flow_workflow start/report`），或作为另一个流程中的一步（由一个子 Agent 执行） | 调研、写作等需要灵活判断的任务 |
+| 类型                   | 谁执行                                                                                                              | 适合                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| 确定性流程（`flow`） | flow 引擎按连线执行，节点之间传类型化变量                                                                           | 固定流水线：抓取、解析、分支、批处理 |
+| 引导流程（`guided`） | 模型照着步骤清单做：在对话里执行（`flow_workflow start/report`），或作为另一个流程中的一步（由一个子 Agent 执行） | 调研、写作等需要灵活判断的任务       |
 
 确定性流程里，**引擎（而非模型）**决定下一个节点：节点之间通过**命名输入绑定**交换**类型化变量**（字面量或上游节点输出/容器内部变量的引用），因此分支、循环、批处理、子流程每次都走同一条路径。详细的节点表、配置项、安全与存储布局见 [`plugins/flow/README.md`](plugins/flow/README.md)。
 

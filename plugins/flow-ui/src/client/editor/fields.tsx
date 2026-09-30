@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { InputBinding, JsonValue, ModelSelection, ValueSource, VarField, VarSchema } from '@dsh-plugins/flow/spec'
-import { NAME_PATTERN, describeVarSchema, uniqueName } from '@dsh-plugins/flow/spec'
+import { NAME_PATTERN, describeVarSchema, formatPath, parsePath, uniqueName } from '@dsh-plugins/flow/spec'
 import type { ModelCatalog } from '../api.ts'
 import type { LocaleKey, Translate } from '../locales.ts'
 import { bindingForOption, insertText, literalFor, sourceKey, type VariableOption } from './variables.ts'
@@ -201,7 +201,7 @@ function VariableOptions({ options, t }: { options: readonly VariableOption[]; t
  * chosen from one dropdown. `onChange` passes the referenced variable's
  * schema when a variable is picked.
  */
-export function ValuePicker({ value, schema, options, t, literal = true, multiline = false, choices, literalExtra, onChange }: {
+export function ValuePicker({ value, schema, options, t, literal = true, multiline = false, choices, literalExtra, literalEditor, onChange }: {
   value: ValueSource
   schema: VarSchema
   options: readonly VariableOption[]
@@ -210,10 +210,14 @@ export function ValuePicker({ value, schema, options, t, literal = true, multili
   multiline?: boolean
   choices?: readonly string[]
   literalExtra?: ReactNode
+  /** Replaces the default literal editor (e.g. a template input for string tool args). */
+  literalEditor?: ReactNode
   onChange(value: ValueSource, schema?: VarSchema): void
 }): ReactNode {
   const key = sourceKey(value)
   const known = key === '' || options.some(option => option.key === key)
+  const [pathDraft, setPathDraft] = useState<string | undefined>(undefined)
+  const refPath = value.kind === 'ref' ? formatPath(value.path) : ''
   return (
     <div className="dsflow-value">
       <select
@@ -227,13 +231,33 @@ export function ValuePicker({ value, schema, options, t, literal = true, multili
         }}
       >
         <option value="" disabled={!literal}>{literal ? t('value.literal') : t('value.pick')}</option>
-        {!known && value.kind === 'ref' && <option value={key}>{t('value.missing')} {value.path.join('.')}</option>}
+        {!known && value.kind === 'ref' && <option value={key}>{t('value.custom')} {formatPath(value.path)}</option>}
         {options.length === 0 && <option value="-" disabled>{t('noVariables')}</option>}
         <VariableOptions options={options} t={t} />
       </select>
+      {value.kind === 'ref' && (
+        <input
+          className="dsflow-input dsflow-input--path"
+          aria-label={t('value.path')}
+          title={t('value.pathHint')}
+          spellCheck={false}
+          value={pathDraft ?? refPath}
+          onChange={(event) => { setPathDraft(event.target.value) }}
+          onBlur={() => {
+            if (pathDraft === undefined) return
+            const [head, ...rest] = parsePath(pathDraft)
+            setPathDraft(undefined)
+            if (head === undefined || pathDraft === refPath) return
+            const next: ValueSource = { ...value, path: [head, ...rest] }
+            const picked = options.find(option => option.key === sourceKey(next))
+            onChange(next, picked?.schema ?? { type: 'any' })
+          }}
+          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+        />
+      )}
       {literal && value.kind === 'literal' && (
         <div className="dsflow-value__literal">
-          <LiteralEditor schema={schema} value={value.value} t={t} multiline={multiline} {...(choices === undefined ? {} : { choices })} onChange={(next) => { onChange({ kind: 'literal', value: next }) }} />
+          {literalEditor ?? <LiteralEditor schema={schema} value={value.value} t={t} multiline={multiline} {...(choices === undefined ? {} : { choices })} onChange={(next) => { onChange({ kind: 'literal', value: next }) }} />}
           {literalExtra}
         </div>
       )}
@@ -267,7 +291,7 @@ export function AddFromVariable({ label, literalLabel, options, t, onPick }: { l
  * Named inputs: each row is a name and a value picker. `fixed` rows keep
  * their names and types (tool parameters, subflow inputs).
  */
-export function BindingsEditor({ bindings, options, t, onChange, fixed = false, removable = true, describe, choices, addLabel }: {
+export function BindingsEditor({ bindings, options, t, onChange, fixed = false, removable = true, describe, choices, addLabel, templateInputs }: {
   bindings: readonly InputBinding[]
   options: readonly VariableOption[]
   t: Translate
@@ -278,6 +302,11 @@ export function BindingsEditor({ bindings, options, t, onChange, fixed = false, 
   /** Fixed choices for a binding's typed-in value (e.g. a tool parameter's enum). */
   choices?: (binding: InputBinding) => readonly string[] | undefined
   addLabel?: string
+  /**
+   * When set, string literals are `{{var}}` templates over these extra
+   * variables; picking an upstream variable adds it and calls `onBoth`.
+   */
+  templateInputs?: { bindings: readonly InputBinding[]; onBoth(next: InputBinding[], inputs: InputBinding[]): void }
 }): ReactNode {
   const update = (index: number, patch: Partial<InputBinding>): void => {
     onChange(bindings.map((binding, i) => i === index ? { ...binding, ...patch } : binding))
@@ -297,6 +326,25 @@ export function BindingsEditor({ bindings, options, t, onChange, fixed = false, 
               t={t}
               {...(choices?.(binding) === undefined ? {} : { choices: choices(binding) })}
               literalExtra={fixed ? undefined : <TypeSelect schema={binding.schema} t={t} onChange={(schema) => { update(index, { schema, value: literalFor(schema) }) }} />}
+              {...(templateInputs !== undefined && binding.schema.type === 'string' && binding.value.kind === 'literal' && choices?.(binding) === undefined
+                ? {
+                    literalEditor: (
+                      <TemplateField
+                        value={typeof binding.value.value === 'string' ? binding.value.value : ''}
+                        bindings={templateInputs.bindings}
+                        options={options}
+                        t={t}
+                        multiline={false}
+                        placeholder={t('value.templateText')}
+                        onChange={(text, inputs) => {
+                          const next = bindings.map((b, i) => i === index ? { ...b, value: { kind: 'literal' as const, value: text } } : b)
+                          if (inputs === undefined) onChange(next)
+                          else templateInputs.onBoth(next, inputs)
+                        }}
+                      />
+                    ),
+                  }
+                : {})}
               onChange={(value, schema) => { update(index, fixed || schema === undefined ? { value } : { value, schema }) }}
             />
             {(typeof removable === 'function' ? removable(binding) : removable) && <RemoveButton t={t} onClick={() => { onChange(bindings.filter((_, i) => i !== index)) }} />}
@@ -372,8 +420,8 @@ export function TemplateField({ label, hint, value, bindings, options, t, multil
           t={t}
           onPick={(option) => {
             if (option === undefined) return
-            const { binding, added } = bindingForOption(bindings, option)
-            insert(binding.name, added ? [...bindings, binding] : undefined)
+            const { binding, added, expr } = bindingForOption(bindings, option)
+            insert(expr, added ? [...bindings, binding] : undefined)
           }}
         />
       </div>
@@ -528,7 +576,7 @@ export function InlineTemplate({ value, bindings, options, t, placeholder, onCha
             const option = options.find(candidate => candidate.key === picked)
             if (option === undefined) return
             const result = bindingForOption(bindings, option)
-            name = result.binding.name
+            name = result.expr
             if (result.added) nextBindings = [...bindings, result.binding]
           }
           onChange(insertText(value, start, end, `{{${name}}}`).text, nextBindings)

@@ -11,6 +11,12 @@ describe('evaluateOp', () => {
     expect(evaluateOp('gt', 2, 1).result).toBe(true)
     expect(evaluateOp('ge', 1, 1).result).toBe(true)
     expect(evaluateOp('lt', 1, 2).result).toBe(true)
+    // Numeric strings compare as numbers; null never orders.
+    expect(evaluateOp('gt', '10', 9).result).toBe(true)
+    const nullCmp = evaluateOp('lt', null, 5)
+    expect(nullCmp.result).toBe(false)
+    expect(nullCmp.warning).toBeDefined()
+    expect(evaluateOp('lt', 'a', 'b').result).toBe(true)
     expect(evaluateOp('le', 2, 1).result).toBe(false)
   })
 

@@ -47,8 +47,8 @@ export function registerCatalogRoutes(ctx: Context, store: FlowStore, toolPrefix
     fetch: async () => {
       try {
         await toolCatalog.refresh()
-        const visible = toolCatalog.schemas().filter(tool => tool.name !== 'run_code' && tool.name !== FLOW_WORKFLOW_TOOL && !tool.name.startsWith(toolPrefix))
-        return json({ tools: visible.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) })
+        const visible = toolCatalog.schemas().filter(tool => tool.name !== 'run_code' && tool.name !== FLOW_WORKFLOW_TOOL && tool.name !== 'flow_design' && !tool.name.startsWith(toolPrefix))
+        return json({ tools: visible.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters, output: toolCatalog.outputSchema(tool.name) ?? null })) })
       } catch (error: unknown) {
         return errorResponse(error, 500)
       }

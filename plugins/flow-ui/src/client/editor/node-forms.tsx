@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ConditionBranch, ConditionOp, ErrorPolicy, FlowDocument, FlowLookup, FlowNode, InputBinding, JsonValue, ValueSource, VarField, VarSchema } from '@dsh-plugins/flow/spec'
-import { CONDITION_OPS, MAX_NODE_RETRIES, NAME_PATTERN, defaultValue, isUnary, specOf, uniqueName } from '@dsh-plugins/flow/spec'
+import { CONDITION_OPS, MAX_NODE_RETRIES, NAME_PATTERN, defaultValue, fieldsFromValue, isUnary, specOf, uniqueName } from '@dsh-plugins/flow/spec'
 import type { CatalogFlow, ModelCatalog, ToolSummary } from '../api.ts'
 import type { LocaleKey, Translate } from '../locales.ts'
 import { newId } from './convert.ts'
@@ -15,7 +15,7 @@ import {
   AddButton, AddFromVariable, BindingsEditor, FieldListEditor, InlineTemplate, KeyValueList, LiteralEditor, ModelSelect,
   NumberField, RemoveButton, Section, Segmented, TemplateField, TypeSelect, ValuePicker,
 } from './fields.tsx'
-import { bodyOutputOptions, literalFor, sourceKey, syncSubflowInputs, syncToolArgs, toolParamChoices, toolParams, variableOptions, type VariableOption } from './variables.ts'
+import { bodyOutputOptions, literalFor, sourceKey, syncSubflowInputs, syncToolArgs, toolOutputFields, toolParamChoices, toolParams, variableOptions, type VariableOption } from './variables.ts'
 
 /** What the forms need besides the node. */
 export interface FormContext {
@@ -27,6 +27,26 @@ export interface FormContext {
   flows: CatalogFlow[]
   /** Whether the flow is guided: forms edit instructions for a model instead of engine settings. */
   guided: boolean
+  /** The selected run's latest outputs of a node, used to infer output fields. */
+  lastOutputs?: (nodeId: string) => Record<string, JsonValue> | undefined
+}
+
+/**
+ * Declared fields of a loosely typed output (`tool.value`, `http.json`), so
+ * downstream nodes can pick `value.a.b` by point-and-click. Fields can be
+ * inferred from the last run's actual output.
+ */
+function OutputShapeSection({ field, fields, sample, declared = [], t, onChange }: { field: string; fields: VarField[]; sample: JsonValue | undefined; declared?: VarField[]; t: Translate; onChange(next: VarField[]): void }): ReactNode {
+  const inferable = sample !== undefined && sample !== null && typeof sample === 'object' && !Array.isArray(sample)
+  return (
+    <Section title={`${t('outputShape.title')} (${field})`} hint={t('outputShape.hint')}>
+      <FieldListEditor fields={fields} t={t} addLabel={t('addOutput')} onChange={onChange} />
+      {declared.length > 0 && <button type="button" className="dsflow-add" onClick={() => { onChange(declared) }}>{t('outputShape.declared')}</button>}
+      <button type="button" className="dsflow-add" disabled={!inferable} title={inferable ? undefined : t('outputShape.noSample')} onClick={() => { onChange(fieldsFromValue(sample)) }}>
+        {t('outputShape.infer')}
+      </button>
+    </Section>
+  )
 }
 
 type NodeOf<T extends FlowNode['type']> = Extract<FlowNode, { type: T }>
@@ -438,6 +458,13 @@ function HttpForm({ node, ctx, options, onChange }: FormProps<'http'>): ReactNod
         </Section>
       )}
       <InputsSection bindings={data.inputs} options={options} t={t} onChange={(inputs) => { set({}, inputs) }} />
+      <OutputShapeSection
+        field="json"
+        fields={data.outputs ?? []}
+        sample={ctx.lastOutputs?.(node.id)?.['json']}
+        t={t}
+        onChange={(outputs) => { onChange({ ...node, data: withOptional(data, 'outputs', outputs.length === 0 ? undefined : outputs) }) }}
+      />
       <div className="dsflow-hint">{t('http.outputsHint')}</div>
       <details className="dsflow-advanced">
         <summary>{t('advanced')}</summary>
@@ -460,7 +487,14 @@ function ToolForm({ node, ctx, options, onChange }: FormProps<'tool'>): ReactNod
   const known = data.tool === '' || tool !== undefined
   const setTool = (name: string): void => {
     const next = ctx.tools?.find(candidate => candidate.name === name)
-    onChange({ ...node, data: { tool: name, args: next === undefined ? data.args : syncToolArgs(toolParams(next.parameters), data.args) } })
+    const declared = toolOutputFields(next?.output)
+    const base = { ...data, tool: name, args: next === undefined ? data.args : syncToolArgs(toolParams(next.parameters), data.args) }
+    onChange({ ...node, data: withOptional(base, 'outputs', declared.length > 0 ? declared : name === data.tool ? data.outputs : undefined) })
+  }
+  const inputs = data.inputs ?? []
+  const templateInputs = {
+    bindings: inputs,
+    onBoth: (args: InputBinding[], nextInputs: InputBinding[]): void => { onChange({ ...node, data: { ...data, args: params === undefined ? args : syncToolArgs(params, args), inputs: nextInputs } }) },
   }
   return (
     <>
@@ -480,7 +514,7 @@ function ToolForm({ node, ctx, options, onChange }: FormProps<'tool'>): ReactNod
       {data.tool !== '' && (
         <Section title={t('tool.params')} hint={params === undefined ? t('tool.paramsUnknown') : params.length === 0 ? t('tool.noParams') : undefined}>
           {params === undefined
-            ? <BindingsEditor bindings={data.args} options={options} t={t} addLabel={t('tool.addParam')} onChange={(args) => { onChange({ ...node, data: { ...data, args } }) }} />
+            ? <BindingsEditor bindings={data.args} options={options} t={t} addLabel={t('tool.addParam')} templateInputs={templateInputs} onChange={(args) => { onChange({ ...node, data: { ...data, args } }) }} />
             : (
               <>
                 <BindingsEditor
@@ -488,6 +522,7 @@ function ToolForm({ node, ctx, options, onChange }: FormProps<'tool'>): ReactNod
                   options={options}
                   t={t}
                   fixed
+                  templateInputs={templateInputs}
                   removable={binding => binding.required === false}
                   describe={binding => params.find(param => param.name === binding.name)?.description}
                   choices={binding => tool === undefined ? undefined : toolParamChoices(tool.parameters, binding.name)}
@@ -506,6 +541,19 @@ function ToolForm({ node, ctx, options, onChange }: FormProps<'tool'>): ReactNod
             )}
         </Section>
       )}
+      {inputs.length > 0 && (
+        <Section title={t('tool.templateVars')} hint={t('tool.templateVarsHint')}>
+          <BindingsEditor bindings={inputs} options={options} t={t} onChange={(next) => { onChange({ ...node, data: { ...data, inputs: next } }) }} />
+        </Section>
+      )}
+      <OutputShapeSection
+        field="value"
+        fields={data.outputs ?? []}
+        sample={ctx.lastOutputs?.(node.id)?.['value']}
+        declared={toolOutputFields(tool?.output)}
+        t={t}
+        onChange={(outputs) => { onChange({ ...node, data: withOptional(data, 'outputs', outputs.length === 0 ? undefined : outputs) }) }}
+      />
       <div className="dsflow-hint">{t('tool.outputsHint')}</div>
     </>
   )

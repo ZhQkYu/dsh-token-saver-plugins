@@ -57,8 +57,8 @@ describe('editor document operations', () => {
 
   it('labels branch edges by their port label', () => {
     const edges = toRfEdges(flow(), undefined, t as never)
-    expect(edges.find(edge => edge.id === 'e2')?.label).toBe('Yes')
-    expect(edges.find(edge => edge.id === 'e1')?.label).toBeUndefined()
+    expect(edges.find(edge => edge.id === 'e2')?.data?.['branch']).toBe('Yes')
+    expect(edges.find(edge => edge.id === 'e1')?.data?.['branch']).toBeUndefined()
   })
 
   it('marks taken and idle edges from the last run', () => {

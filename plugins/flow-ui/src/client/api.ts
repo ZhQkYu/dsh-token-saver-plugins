@@ -50,6 +50,8 @@ export interface ToolSummary {
   name: string
   description: string
   parameters: unknown
+  /** JSON Schema of the tool's structured `value`, or null when undeclared. */
+  output?: unknown
 }
 
 /** The models the Host can call, by provider. */
@@ -97,6 +99,7 @@ export const api = {
   startRun: (flowId: string, inputs: JsonValue, workspaceId: string) =>
     post<{ runId: string; sessionId?: string }>('api/dsh-flow/run.start', { flowId, version: 'draft', inputs, workspaceId }),
   cancelRun: (runId: string) => post<{ ok: true }>('api/dsh-flow/run.cancel', { runId }),
+  debugNode: (flow: FlowDocument, nodeId: string, inputs: JsonValue, workspaceId: string) => post<{ runId: string }>('api/dsh-flow/node.debug', { flow, nodeId, inputs, workspaceId }),
   answer: (runId: string, execKey: string, answer: { text?: string; optionId?: string }) => post<{ ok: true }>('api/dsh-flow/run.answer', { runId, execKey, answer }),
   getRun: (runId: string) => request<{ summary: RunSummary; events: RunEvent[] }>(`api/dsh-flow/run.get?runId=${encodeURIComponent(runId)}`),
   workspaces: () => request<{ workspaces: WorkspaceSummary[] }>('api/dsh-flow/catalog.workspaces').then(res => res.workspaces),

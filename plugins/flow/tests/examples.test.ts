@@ -9,8 +9,8 @@ const dir = path.join(import.meta.dirname, '..', 'examples')
 describe('example flows', () => {
   const files = fs.readdirSync(dir).filter(name => name.endsWith('.json'))
 
-  it('ships the four documented examples', () => {
-    expect(files.sort()).toEqual(['http-check.json', 'read-summarize-confirm.json', 'review-loop.json', 'topic-outline.json'])
+  it('ships the documented examples', () => {
+    expect(files.sort()).toEqual(['http-check.json', 'read-summarize-confirm.json', 'review-loop.json', 'topic-brief.json', 'topic-outline.json'])
   })
 
   for (const file of files) {

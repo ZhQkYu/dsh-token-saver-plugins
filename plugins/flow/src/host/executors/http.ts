@@ -24,12 +24,19 @@ export const httpExecutor: NodeExecutor<HttpNode> = {
     const values = inputs
     const url = renderTemplate(node.data.url, values).text
     const headers: Record<string, string> = {}
+    const warnings: string[] = []
     for (const header of node.data.headers) {
       validateHeaderName(header.name)
       const value = renderTemplate(header.value, values).text
       validateHeaderValue(value)
-      if (isForbiddenHeader(header.name)) continue
+      if (isForbiddenHeader(header.name)) {
+        warnings.push(`header "${header.name}" is managed by the HTTP client and was ignored`)
+        continue
+      }
       headers[header.name] = value
+    }
+    const setDefaultContentType = (value: string): void => {
+      if (!Object.keys(headers).some(name => name.toLowerCase() === 'content-type')) headers['content-type'] = value
     }
     const query = new URLSearchParams()
     for (const q of node.data.query) query.append(q.name, renderTemplate(q.value, values).text)
@@ -49,12 +56,12 @@ export const httpExecutor: NodeExecutor<HttpNode> = {
         throw new NodeError('HTTP_BAD_BODY', 'json body is not valid JSON')
       }
       body = rendered
-      headers['content-type'] = 'application/json'
+      setDefaultContentType('application/json')
     } else if (node.data.body.kind === 'form') {
       const form = new URLSearchParams()
       for (const field of node.data.body.fields) form.append(field.name, renderTemplate(field.value, values).text)
       body = form.toString()
-      headers['content-type'] = 'application/x-www-form-urlencoded'
+      setDefaultContentType('application/x-www-form-urlencoded')
     }
 
     if ((method === 'GET' || method === 'HEAD') && body !== undefined) {
@@ -83,10 +90,13 @@ export const httpExecutor: NodeExecutor<HttpNode> = {
           body: result.body,
           json: result.json,
         },
+        ...(warnings.length > 0 ? { warnings } : {}),
       }
     } catch (error: unknown) {
       if (error instanceof BlockedUrlError) throw new NodeError('HTTP_BLOCKED', error.message, false)
-      throw new NodeError('HTTP_NETWORK', error instanceof Error ? error.message : String(error), true)
+      // Only idempotent methods retry: a non-idempotent request may already have reached the server.
+      const idempotent = method === 'GET' || method === 'HEAD'
+      throw new NodeError('HTTP_NETWORK', error instanceof Error ? error.message : String(error), idempotent)
     }
   },
 }

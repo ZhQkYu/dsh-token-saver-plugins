@@ -1,3 +1,5 @@
 packages:
   - plugins/*
-autoInstallPeers: false   # 防止 pnpm 去 npm 拉 @deepseek-ai/* 预发布包
+allowBuilds:
+  esbuild: true
+autoInstallPeers: false # 防止 pnpm 去 npm 拉 @deepseek-ai/* 预发布包
