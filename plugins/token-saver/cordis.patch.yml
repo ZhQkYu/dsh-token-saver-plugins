@@ -55,27 +55,55 @@
             displayName: Doubao
             url: https://www.doubao.com/chat/
             strengths: Chinese writing, copywriting, image prompts
-            enabled: false
+            enabled: true
             minIntervalMs: 3000
-            selectors: { input: '', message: '' }
+            # Verified signed in on 2026-09-30. data-testid attributes are stable; the signed-out
+            # page shows a hidden ProseMirror editor instead of this textarea.
+            selectors:
+              input: '[data-testid="chat_input_input"] textarea'
+              message: '[data-testid="receive_message"]'
+              messageContent: '[data-testid="message_text_content"]'
+              newChat: '[data-testid="create_conversation_button"]'
+              loggedOut: '[data-testid="to_login_button"]'
           - id: qianwen
             displayName: Qianwen
             url: https://chat.qwen.ai/
             strengths: Chinese knowledge Q&A, summarization
+            # Verified signed in. Sending may trigger a slider captcha; solve it once by hand in the
+            # bridge's browser window. The answer body excludes the "Thinking completed" card.
             enabled: false
             minIntervalMs: 3000
-            selectors: { input: '', message: '' }
+            selectors:
+              input: 'textarea.message-input-textarea'
+              message: '.qwen-chat-message-assistant'
+              messageContent: '.response-message-content.phase-answer'
+              newChat: '[aria-label="New Chat"]'
+              stop: '.stop-button'
           - id: zhipu
             displayName: Zhipu
             url: https://chatglm.cn/
             strengths: code generation and explanation
+            # Guest replies work. The page also holds a hidden WAF textarea, so the input needs its class.
+            # The site may show a slider "Access Verification" page; call web_ai_open and solve it by hand.
             enabled: false
             minIntervalMs: 3000
-            selectors: { input: '', message: '' }
+            selectors:
+              input: 'textarea.scroll-display-none'
+              message: '.answer'
+              # No messageContent: an answer holds two .markdown-body nodes (thinking first, reply
+              # last) and no verified selector isolates the reply. The collapsed reply's innerText
+              # was "ChatGLM / 思考结束 / <answer>".
+              newChat: '.new-session'
           - id: kimi
             displayName: Kimi
             url: https://www.kimi.com/
             strengths: long-document reading, web search summaries
+            # Verified signed in. The reply body is the flat markdown; tool-call and thinking blocks are nested deeper.
             enabled: false
             minIntervalMs: 3000
-            selectors: { input: '', message: '' }
+            selectors:
+              input: '.chat-input-editor'
+              message: '.segment-assistant'
+              messageContent: '.toolcall-rollup__flat > .markdown-container'
+              newChat: '.new-chat-btn'
+              loggedOut: '.login-button'
