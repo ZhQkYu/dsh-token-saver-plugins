@@ -203,6 +203,7 @@ function wrapPage(target) {
     isVisible: () => locator.isVisible(),
     innerText: () => locator.innerText(),
     allInnerTexts: () => locator.allInnerTexts(),
+    getAttribute: name => locator.getAttribute(name),
     fill: value => locator.fill(value),
     click: () => locator.click(),
     press: key => locator.press(key),

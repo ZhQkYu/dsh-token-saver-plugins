@@ -33,6 +33,7 @@
     "@deepseek-ai/dsh-sandbox-policy": "link:../deepseek-harness/packages/sandbox/sandbox-policy",
     "@deepseek-ai/dsh-sandbox": "link:../deepseek-harness/packages/sandbox/sandbox",
     "@deepseek-ai/dsh-subagent": "link:../deepseek-harness/packages/subagent/subagent",
+    "@deepseek-ai/dsh-jobs": "link:../deepseek-harness/packages/jobs/jobs",
     "@deepseek-ai/dsh-user-questions": "link:../deepseek-harness/packages/interaction/user-questions",
     "@deepseek-ai/dsh-skill": "link:../deepseek-harness/packages/skill/skill"
   }

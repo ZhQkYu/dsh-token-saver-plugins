@@ -27,8 +27,8 @@
           headless: false
           args: ['--disable-blink-features=AutomationControlled']
         inputTimeoutMs: 15000
-        firstTokenTimeoutMs: 60000
-        maxWaitMs: 300000
+        firstTokenTimeoutMs: 300000
+        maxWaitMs: 900000
         stableMs: 2500
         pollMs: 500
         replyMaxChars: 20000
@@ -51,6 +51,25 @@
               newChat: ''
               busy: ''
               stop: ''
+            # Switches set before every ask; enabled: false turns one off. State comes from aria-pressed.
+            toggles:
+              - name: DeepThink
+                selector: 'div.ds-toggle-button:has-text("DeepThink"), div.ds-toggle-button:has-text("深度思考")'
+                enabled: true
+              - name: Search
+                selector: 'div.ds-toggle-button:has-text("Search"), div.ds-toggle-button:has-text("智能搜索"), div.ds-toggle-button:has-text("联网搜索")'
+                enabled: true
+            # Web subagent: true also registers web_subagent, a read-only ReAct subagent (list_dir,
+            # find_files, read_file, grep in the session workspace) that mirrors DSH's `subagent` tool:
+            # no tool deadline, final answer only, optional run_in_background job. web_ai_ask stays
+            # plain question answering either way.
+            agent:
+              enabled: true
+              maxSteps: 20
+              observationMaxChars: 4000
+              formatRetries: 2
+              contextResetChars: 60000
+              pageRetries: 2
           - id: doubao
             displayName: Doubao
             url: https://www.doubao.com/chat/

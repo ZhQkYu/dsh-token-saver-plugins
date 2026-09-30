@@ -29,6 +29,9 @@ importers:
       '@deepseek-ai/dsh-home-paths':
         specifier: link:../deepseek-harness/packages/util/home-paths
         version: link:../deepseek-harness/packages/util/home-paths
+      '@deepseek-ai/dsh-jobs':
+        specifier: link:../deepseek-harness/packages/jobs/jobs
+        version: link:../deepseek-harness/packages/jobs/jobs
       '@deepseek-ai/dsh-llm':
         specifier: link:../deepseek-harness/packages/llm/llm
         version: link:../deepseek-harness/packages/llm/llm

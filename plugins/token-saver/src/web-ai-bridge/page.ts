@@ -23,6 +23,8 @@ export interface LocatorLike {
   allInnerTexts(): Promise<string[]>
   /** Replace the value of a textarea, input, or contenteditable. */
   fill(value: string): Promise<void>
+  /** An attribute of the (single) matched element, or null when absent. */
+  getAttribute(name: string): Promise<string | null>
   /** Click the (single) matched element. */
   click(): Promise<void>
   /** Press a key on the (single) matched element. */

@@ -12,6 +12,8 @@ interface FakeDom {
   newChatVisible: boolean
   fillFails: boolean
   messages: string[]
+  /** Toggle states keyed by selector. */
+  toggles?: Record<string, boolean>
   /** Called after a prompt is sent; drives the fake reply. */
   onSend: (dom: FakeDom) => void
 }
@@ -36,7 +38,7 @@ function fakePage(dom: FakeDom): { page: PageLike; log: FakeLog } {
       case 'new': return dom.newChatVisible ? [{ text: 'New chat', visible: true }] : []
       case 'send': return [{ text: 'Send', visible: true }]
       case 'msg': return dom.messages.map(text => ({ text, visible: true }))
-      default: return []
+      default: return dom.toggles?.[selector] !== undefined ? [{ text: selector, visible: true }] : []
     }
   }
   const locator = (selector: string, pick?: 'first' | 'last'): LocatorLike => {
@@ -62,6 +64,11 @@ function fakePage(dom: FakeDom): { page: PageLike; log: FakeLog } {
       },
       innerText: async () => single().text,
       allInnerTexts: async () => matched().map(element => element.text),
+      getAttribute: async (name) => {
+        single()
+        const state = dom.toggles?.[selector]
+        return name === 'aria-pressed' && state !== undefined ? String(state) : null
+      },
       fill: async (value) => {
         single()
         if (dom.fillFails) throw new Error('not fillable')
@@ -73,6 +80,7 @@ function fakePage(dom: FakeDom): { page: PageLike; log: FakeLog } {
         if (selector === 'send') send()
         if (selector === 'new') dom.messages = []
         if (selector === 'stop') dom.busy = false
+        if (dom.toggles?.[selector] !== undefined) dom.toggles[selector] = !dom.toggles[selector]
       },
       press: async (key) => {
         single()
@@ -127,6 +135,19 @@ const timings: AskTimings = { inputTimeoutMs: 60, firstTokenTimeoutMs: 80, maxWa
 const signal = (): AbortSignal => new AbortController().signal
 
 describe('ask', () => {
+  it('sets configured toggles to their desired state before sending and skips missing ones', async () => {
+    const state = dom({ toggles: { think: false, search: true, web: true } })
+    const { page, log } = fakePage(state)
+    const toggles = [
+      { name: 'think', selector: 'think', enabled: true },
+      { name: 'search', selector: 'search', enabled: true },
+      { name: 'web', selector: 'web', enabled: false },
+      { name: 'gone', selector: 'gone', enabled: true },
+    ]
+    await ask(page, { ...provider(), toggles }, 'hi', 'continue', timings, signal())
+    expect(state.toggles).toEqual({ think: true, search: true, web: false })
+    expect(log.clicks).toEqual(['think', 'web', 'input'])
+  })
   it('waits for a growing reply to stabilize and returns only the newest reply', async () => {
     const state = dom({
       messages: ['old answer'],

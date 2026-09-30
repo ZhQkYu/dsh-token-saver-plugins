@@ -121,6 +121,20 @@ pnpm dsh web --patch apps/web/tests/pin-browse-picker.overlay.yml
 
 - `browser`: `{ mode: 'launch'|'cdp', channel: 'msedge'|'chrome', userDataDir?, headless, cdpUrl?, args }`；`cdp` 模式必须提供 `cdpUrl`。
 - `providers`: 每个含 `id`（`^[a-z0-9-]{1,32}$`，唯一）、`displayName`、`url`（https）、`strengths`、`enabled`、`selectors`、`minIntervalMs`。**启用的 provider 必须配置 `selectors.input` 与 `selectors.message`，否则插件加载失败**；未探测选择器前请保持 `enabled: false`（默认）。
+- `providers[].toggles`（可选）：每次提问前把页面开关设为期望状态，每项含 `name`、`selector`、`enabled`（默认 `true`；`false` 表示关闭）。状态读取 `aria-pressed`/`aria-checked`；找不到开关或读不到状态时跳过。默认给 DeepSeek 打开「深度思考」和「智能搜索」。
+- `providers[].agent`（可选）：网页子 agent 开关。`enabled: true` 时额外注册 `web_subagent` 工具（`web_ai_ask` 仍是普通问答），行为对齐 DSH 原生 `subagent`：
+  - 参数：`description`、`prompt`、可选 `provider`、可选 `run_in_background`。
+  - 前台运行，没有工具超时，主 agent 只收到最终答案；`run_in_background: true` 时作为后台 job 运行（`job_output` 取结果，`job_kill` 停止），未加载 jobs 时自动退回前台运行。
+  - 本地运行 ReAct 循环：网页 AI 用 `<action>{"tool","args"}</action>` 调用工具（一次可以写多个），用 `<final>` 给出答案。
+  - 可用的只读工具有 `list_dir`、`find_files`、`read_file`、`grep`，只能访问会话工作区，指向工作区外的符号链接也会被拒绝。`.env`、`.git`、`node_modules`、密钥和证书文件一律拒绝；发出去的输出会去掉密钥。
+  - 容错：
+    - 宽松解析 JSON（兼容代码围栏、多余逗号、字段别名、HTML 转义、截断的块）；格式出错会提示重试。
+    - 工具出错时，把错误作为观察结果交给网页 AI。重复的调用不会再执行。
+    - 页面超时后换新对话并带上历史，最多重试 `pageRetries` 次。上下文超过 `contextResetChars` 时，自动开新对话并附上压缩历史。
+    - 工具次数用完时，要求网页 AI 立即给出答案。
+    - 除取消以外都不抛错，失败时返回状态和已经查到的信息。
+  - 配置项：`maxSteps`（默认 20）、`observationMaxChars`（4000）、`formatRetries`（2）、`contextResetChars`（60000）、`pageRetries`（2）。
+  - 请遵守平台服务条款，低频使用。
 - `inputTimeoutMs`（默认 15000）、`firstTokenTimeoutMs`（默认 60000）、`maxWaitMs`（默认 300000，单次提问总上限）、`stableMs`（默认 2500）、`pollMs`（默认 500）、`replyMaxChars`（默认 20000）。
 
 ### 默认 provider

@@ -6,6 +6,7 @@
  */
 
 import type { LocatorLike, PageLike } from './page.ts'
+import type { AgentConfig } from './agent.ts'
 
 /** CSS selectors for one web-AI provider page. */
 export interface SelectorSet {
@@ -27,6 +28,19 @@ export interface SelectorSet {
   loggedOut?: string
 }
 
+/**
+ * A provider page switch (e.g. deep thinking, web search) the driver sets before
+ * each ask. Its state is read from `aria-pressed`, falling back to `aria-checked`.
+ */
+export interface ToggleConfig {
+  /** Display name used in logs and errors. */
+  name: string
+  /** CSS selector for the switch element. */
+  selector: string
+  /** Desired state: true turns the switch on, false turns it off. */
+  enabled: boolean
+}
+
 /** One configured web-AI provider. */
 export interface ProviderConfig {
   /** Provider id; `^[a-z0-9-]{1,32}$`. */
@@ -41,6 +55,10 @@ export interface ProviderConfig {
   enabled: boolean
   /** CSS selectors for this provider. */
   selectors: SelectorSet
+  /** Switches set to their desired state before each ask; a missing switch is skipped. */
+  toggles?: ToggleConfig[]
+  /** Agent mode; when enabled, web_ai_ask runs a local read-only ReAct loop driven by this provider. */
+  agent?: AgentConfig
   /** Minimum interval between asks to the same provider, in ms. */
   minIntervalMs: number
 }
@@ -145,6 +163,31 @@ async function openConversation(page: PageLike, provider: ProviderConfig, conver
   await page.goto(provider.url)
 }
 
+/** Read a switch's on/off state, or `undefined` when it exposes none. */
+async function toggleState(toggle: LocatorLike): Promise<boolean | undefined> {
+  for (const name of ['aria-pressed', 'aria-checked']) {
+    const value = await toggle.getAttribute(name).then(v => v, () => null)
+    if (value === 'true') return true
+    if (value === 'false') return false
+  }
+  return undefined
+}
+
+/**
+ * Set each configured switch to its desired state. A switch that is absent or
+ * exposes no state is left alone, so page redesigns never block an ask.
+ */
+async function applyToggles(page: PageLike, provider: ProviderConfig, timings: AskTimings, signal: AbortSignal): Promise<void> {
+  for (const config of provider.toggles ?? []) {
+    const toggle = page.locator(config.selector).first()
+    if (!await visible(toggle)) continue
+    const state = await toggleState(toggle)
+    if (state === undefined || state === config.enabled) continue
+    if (!await toggle.click().then(() => true, () => false)) continue
+    await waitFor(async () => await toggleState(toggle) === config.enabled, timings.inputTimeoutMs, timings.pollMs, signal)
+  }
+}
+
 /** Read the newest reply's answer text, or `undefined` when it could not be read this poll. */
 async function readReply(message: LocatorLike, provider: ProviderConfig): Promise<string | undefined> {
   const last = message.last()
@@ -197,6 +240,7 @@ export async function ask(
   // A single-page app may still show the previous chat right after "new chat"; let it clear first.
   if (conversation === 'new') await waitFor(async () => await countOf(message) === 0, timings.inputTimeoutMs, timings.pollMs, signal)
   const before = await countOf(message)
+  await applyToggles(page, provider, timings, signal)
 
   await input.click()
   if (!await input.fill(prompt).then(() => true, () => false)) await page.insertText(prompt)
