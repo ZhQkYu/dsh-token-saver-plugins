@@ -90,7 +90,9 @@ The plugin always registers one tool, `flow_workflow`, whose definition does not
 
 ## The Workflow designer preset
 
-The bundle adds the `flow-designer` agent preset (工作流设计师, `presets/flow-designer.patch.yml`). It composes the `@dsh-plugins/flow/design` plugin, the `skill`, `ask_user_question`, `todo_write`, `web_search`, `web_fetch`, file read/write/search, and `present` tools, plus `/compact`, and compaction. The design plugin registers the `flow_design` tool and a skill provider for `skills/flow-authoring` and `skills/flow-debugging`.
+The bundle adds the `flow-designer` agent preset (工作流设计师, `presets/flow-designer.patch.yml`). It composes the `@dsh-plugins/flow/design` plugin with the standard agent toolset: the `skill` tool and project skills, `ask_user_question`, `todo_write`, `web_search`, `web_fetch`, file read/write/search, `present`, background jobs, shell (`bash` or `pwsh`, by platform), the session goal, plan mode, subagents (`subagent`, `subagent_fork`, `send_message`, `list_agents`), the `workflow` fan-out tool, and PTC (`run_code`, because the preset sets `mode: both`). It also adds `/goal`, `/compact`, and compaction. The design plugin registers the `flow_design` tool and a skill provider for `skills/flow-authoring` and `skills/flow-debugging`.
+
+The preset is a scoped tree of its own: its rows resolve against the deployment's providers (`ctx.shell`, `ctx.jobs`, `ctx.subagents`, `ctx.ptcRuntime`, `ctx.fs`), which the base bundle already mounts. Rows that provide a service instead of consuming one must sit in a `group: true` row with an `isolate:` realm — that is why plan mode and the delegation tools are grouped.
 
 | `action` | Does |
 |---|---|
