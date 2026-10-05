@@ -2,6 +2,7 @@
   "name": "@dsh-plugins/flow",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Coze-style deterministic workflow engine for DSH: typed variables, data flow, control flow, and workflows exposed as tools",
   "exports": {

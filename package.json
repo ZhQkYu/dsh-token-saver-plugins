@@ -1,6 +1,9 @@
 {
   "name": "dsh-plugins-workspace",
   "private": true,
+  "license": "MIT",
+  "description": "Plugins for DeepSeek Harness: tool gating, session handoff, free web-AI bridge, and a visual workflow engine",
+  "repository": { "type": "git", "url": "git+https://github.com/ZhQkYu/dsh-plugins.git" },
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",

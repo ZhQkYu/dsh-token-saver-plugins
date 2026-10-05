@@ -2,6 +2,7 @@
   "name": "@dsh-plugins/token-saver",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Token-saving plugins for DSH: tool gating, session handoff, free web-AI bridge",
   "exports": {
